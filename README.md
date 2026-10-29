@@ -2,6 +2,24 @@
 
 A Rust-based multi-vendor network configuration translator and network emulation generator.
 
+## CI & Quality Checks
+
+This repository uses GitHub Actions CI to ensure code quality. Every pull request targeting `main` and pushes to `main` must pass the automated checks:
+
+- `cargo fmt --check` (Code formatting)
+- `cargo test --workspace` (Unit & Golden tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` (Clippy lint checks)
+
+### Running Checks Locally
+
+Contributors can run the same checks locally prior to submitting pull requests:
+
+```bash
+cargo fmt --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
 ## Supported Cisco IOS Syntax (`crates/parse-ios`)
 
 The initial Cisco IOS parser supports:
