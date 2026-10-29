@@ -3,6 +3,16 @@ use ir::OspfAreaId;
 use std::net::Ipv4Addr;
 
 #[test]
+fn test_parse_empty_and_comments() {
+    let cfg = "!\n! Comment line\n   \n";
+    let device = parse_ios_config(cfg, Some("empty.cfg"));
+    assert_eq!(device.hostname, "router");
+    assert!(device.interfaces.is_empty());
+    assert!(device.ospf.is_none());
+    assert!(device.unparsed_lines.is_empty());
+}
+
+#[test]
 fn test_parse_basic_router() {
     let cfg = r#"
 hostname R1
@@ -34,6 +44,28 @@ interface GigabitEthernet0/1
     assert_eq!(if1.ipv4.as_ref().unwrap().to_string(), "192.168.1.1/24");
 
     assert!(device.unparsed_lines.is_empty());
+}
+
+#[test]
+fn test_invalid_subnet_mask() {
+    let cfg = r#"
+hostname R_BAD_MASK
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.240.128
+"#;
+
+    let device = parse_ios_config(cfg, Some("bad_mask.cfg"));
+    assert_eq!(device.interfaces.len(), 1);
+    assert!(device.interfaces[0].ipv4.is_none());
+    assert_eq!(device.unparsed_lines.len(), 1);
+    assert_eq!(device.unparsed_lines[0].line_number, 4);
+    assert_eq!(
+        device.unparsed_lines[0].content,
+        "ip address 10.0.0.1 255.255.240.128"
+    );
+    assert!(device.unparsed_lines[0]
+        .reason
+        .contains("invalid IP address mask"));
 }
 
 #[test]
@@ -112,6 +144,21 @@ router ospf 10
         device.unparsed_lines[2].content,
         "auto-cost reference-bandwidth 1000"
     );
+}
+
+#[test]
+fn test_malformed_inputs_without_panic() {
+    let cfg = r#"
+hostname
+interface
+ ip address invalid ip
+router ospf invalid
+ router-id invalid
+ network invalid
+"#;
+
+    let device = parse_ios_config(cfg, Some("malformed.cfg"));
+    assert!(!device.unparsed_lines.is_empty());
 }
 
 #[test]
