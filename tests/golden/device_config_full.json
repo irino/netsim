@@ -1,0 +1,39 @@
+{
+  "hostname": "router-1",
+  "interfaces": [
+    {
+      "name": "GigabitEthernet0/0",
+      "description": "Uplink to Core",
+      "enabled": true,
+      "ipv4": {
+        "address": "10.0.0.1",
+        "prefix-length": 24
+      },
+      "ospf": {
+        "area": 0,
+        "cost": 10
+      }
+    },
+    {
+      "name": "GigabitEthernet0/1",
+      "description": "Downlink to LAN",
+      "enabled": false,
+      "ipv4": {
+        "address": "192.168.1.1",
+        "prefix-length": 24
+      }
+    }
+  ],
+  "ospf": {
+    "process-id": 1,
+    "router-id": "1.1.1.1"
+  },
+  "unparsed-lines": [
+    {
+      "file-path": "configs/router-1.cfg",
+      "line-number": 42,
+      "content": "ip ipsec transform-set TS esp-aes esp-sha-hmac",
+      "reason": "IPsec configuration is not supported"
+    }
+  ]
+}
