@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "crates/ir",
+    "crates/parse-ios",
 ]
 resolver = "2"

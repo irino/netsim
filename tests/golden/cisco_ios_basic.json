@@ -1,0 +1,38 @@
+{
+  "hostname": "R-GOLDEN",
+  "interfaces": [
+    {
+      "name": "GigabitEthernet0/0",
+      "description": "Primary Interface",
+      "enabled": true,
+      "ipv4": {
+        "address": "10.0.1.1",
+        "prefix-length": 24
+      },
+      "ospf": {
+        "area": 0
+      }
+    },
+    {
+      "name": "GigabitEthernet0/1",
+      "description": "Secondary Interface",
+      "enabled": false,
+      "ipv4": {
+        "address": "192.168.100.1",
+        "prefix-length": 24
+      }
+    }
+  ],
+  "ospf": {
+    "process-id": 1,
+    "router-id": "1.1.1.1"
+  },
+  "unparsed-lines": [
+    {
+      "file-path": "cisco_ios_basic.cfg",
+      "line-number": 18,
+      "content": "unsupported global command",
+      "reason": "unsupported or unrecognized global command"
+    }
+  ]
+}
