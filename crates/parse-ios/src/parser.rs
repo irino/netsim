@@ -71,9 +71,8 @@ fn parse_ospf_area(input: &mut &str) -> PResult<OspfAreaId> {
     space0.parse_next(input)?;
     let checkpoint = *input;
 
-    if let Ok(ip) = parse_ipv4.parse_next(input) {
-        // If ip is dotted quad (contains '.')
-        if ip.to_string().contains('.') {
+    if input.contains('.') {
+        if let Ok(ip) = parse_ipv4.parse_next(input) {
             return Ok(OspfAreaId::Ipv4(ip));
         }
     }
@@ -100,12 +99,29 @@ pub fn parse_ios_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         let line_num = idx + 1;
         let line = raw_line.trim();
 
-        // Skip blank lines and comment lines (starting with !)
-        if line.is_empty() || line.starts_with('!') {
+        // Skip blank lines
+        if line.is_empty() {
             continue;
         }
 
-        // Check for block exits or transitions
+        // Comment lines (!) separate blocks in Cisco IOS configs
+        if line.starts_with('!') {
+            match ctx {
+                Context::Interface(iface) => interfaces.push(iface),
+                Context::Ospf(proc_id, router_id, mut nets) => {
+                    ospf_process = Some(OspfProcess {
+                        process_id: proc_id,
+                        router_id,
+                    });
+                    ospf_networks.append(&mut nets);
+                }
+                Context::Global => {}
+            }
+            ctx = Context::Global;
+            continue;
+        }
+
+        // Explicit block exits
         if line == "exit" || line == "end" {
             match ctx {
                 Context::Interface(iface) => interfaces.push(iface),
@@ -120,6 +136,37 @@ pub fn parse_ios_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             }
             ctx = Context::Global;
             continue;
+        }
+
+        // Check if an unindented top-level line occurred while in a sub-block
+        let is_indented = raw_line.starts_with(' ') || raw_line.starts_with('\t');
+        if !is_indented && !matches!(ctx, Context::Global) {
+            let is_subcommand = match &ctx {
+                Context::Interface(_) => {
+                    line.starts_with("description ")
+                        || line.starts_with("ip address ")
+                        || line == "shutdown"
+                        || line == "no shutdown"
+                }
+                Context::Ospf(..) => line.starts_with("router-id ") || line.starts_with("network "),
+                Context::Global => unreachable!(),
+            };
+
+            if !is_subcommand {
+                // Terminate the active block and transition to global context
+                match ctx {
+                    Context::Interface(iface) => interfaces.push(iface),
+                    Context::Ospf(proc_id, router_id, mut nets) => {
+                        ospf_process = Some(OspfProcess {
+                            process_id: proc_id,
+                            router_id,
+                        });
+                        ospf_networks.append(&mut nets);
+                    }
+                    Context::Global => {}
+                }
+                ctx = Context::Global;
+            }
         }
 
         match &mut ctx {
