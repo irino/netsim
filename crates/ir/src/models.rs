@@ -71,7 +71,7 @@ impl<'de> Deserialize<'de> for PrefixLength {
 }
 
 /// IPv4 address and prefix length pair.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Ipv4Prefix {
     pub address: Ipv4Addr,
@@ -83,6 +83,26 @@ impl Ipv4Prefix {
         Self {
             address,
             prefix_length,
+        }
+    }
+
+    /// Calculate the network address for this prefix.
+    pub fn network_address(&self) -> Ipv4Addr {
+        let ip_u32 = u32::from(self.address);
+        let len = self.prefix_length.value();
+        let mask = if len == 0 {
+            0
+        } else {
+            !((1u64 << (32 - len)) - 1) as u32
+        };
+        Ipv4Addr::from(ip_u32 & mask)
+    }
+
+    /// Returns the network prefix (network address + prefix length).
+    pub fn network_prefix(&self) -> Ipv4Prefix {
+        Ipv4Prefix {
+            address: self.network_address(),
+            prefix_length: self.prefix_length,
         }
     }
 }
@@ -145,7 +165,7 @@ impl<'de> Deserialize<'de> for Ipv4Prefix {
 }
 
 /// OSPF Area Identifier, representable as a 32-bit integer or an IPv4 dotted-quad address.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OspfAreaId {
     Number(u32),
@@ -162,7 +182,7 @@ impl fmt::Display for OspfAreaId {
 }
 
 /// OSPF configuration for an interface.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct InterfaceOspfConfig {
     pub area: OspfAreaId,
@@ -173,7 +193,7 @@ pub struct InterfaceOspfConfig {
 }
 
 /// Network interface configuration aligned with ietf-interfaces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Interface {
     pub name: String,
@@ -187,12 +207,22 @@ pub struct Interface {
     pub ospf: Option<InterfaceOspfConfig>,
 }
 
+impl Interface {
+    /// Check if this interface is a loopback interface based on standard naming conventions.
+    pub fn is_loopback(&self) -> bool {
+        let name_lower = self.name.to_lowercase();
+        name_lower.starts_with("loopback")
+            || name_lower.starts_with("lo")
+            || name_lower.starts_with("lo0")
+    }
+}
+
 fn default_true() -> bool {
     true
 }
 
 /// OSPF process configuration aligned with ietf-routing / ietf-ospf.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct OspfProcess {
     pub process_id: u16,
@@ -201,7 +231,7 @@ pub struct OspfProcess {
 }
 
 /// Unparsed or unsupported configuration line metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnparsedLine {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,7 +242,7 @@ pub struct UnparsedLine {
 }
 
 /// Root vendor-independent device configuration representation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DeviceConfig {
     pub hostname: String,
