@@ -28,7 +28,7 @@ jobs:
        github.event.comment.user.login == github.repository_owner &&
        startsWith(github.event.comment.body, '/retry'))
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
       contents: read
       issues: write
@@ -52,7 +52,7 @@ jobs:
             echo "- 🚀 Started processing issue #${ISSUE_NUMBER}..."
             echo "- 🚀 Issue #${ISSUE_NUMBER} の処理を開始しました..."
           } > "$RUNNER_TEMP/start-comment.md"
-          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/start-comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/start-comment.md" || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -104,10 +104,13 @@ jobs:
             log="$RUNNER_TEMP/cargo-validation-${round}.log"
             {
               echo "### Validation round $round"
-              cargo fmt --all &&
+              echo "==> 1. cargo fmt check"
               cargo fmt --all -- --check &&
+              echo "==> 2. cargo check" &&
               cargo check --workspace --all-targets &&
+              echo "==> 3. cargo test" &&
               cargo test --workspace &&
+              echo "==> 4. cargo clippy" &&
               cargo clippy --workspace --all-targets -- -D warnings
             } >"$log" 2>&1
             status=$?
@@ -193,13 +196,29 @@ jobs:
           name: agent-artifact-${{ github.event.issue.number }}
           path: ${{ runner.temp }}
 
-      - name: Apply agent patch
+      - name: Validate and apply agent patch
         run: |
-          echo "[pr] Applying patch from artifact... / アーティファクトからパッチを適用しています..."
-          git apply --binary --whitespace=nowarn "${{ runner.temp }}/agent.patch"
-          echo "[pr] Patch applied successfully. / パッチを正常に適用しました。"
+          echo "[pr] Validating patch safety... / パッチの安全性を検証中..."
+          PATCH_FILE="${{ runner.temp }}/agent.patch"
+          test -s "$PATCH_FILE"
+          test "$(wc -c < "$PATCH_FILE")" -le 250000
 
-      - name: Create branch and pull request
+          # Check patch integrity
+          git apply --check --whitespace=nowarn "$PATCH_FILE"
+
+          # Extract changed files and check for forbidden paths (.github, secrets, etc.)
+          git apply --numstat "$PATCH_FILE" | awk '{print $3}' > changed-files.txt
+          if grep -E '(^\.github/|^\.git/|(^|/)\.env|(^|/)secrets?([./]|$))' changed-files.txt; then
+            echo "[pr] Error: Forbidden file changes detected in patch! / エラー: 禁止されたファイルへの変更が検出されました！" >&2
+            exit 1
+          fi
+
+          echo "[pr] Applying patch... / パッチを適用しています..."
+          git apply --binary --whitespace=nowarn "$PATCH_FILE"
+          git diff --check
+          echo "[pr] Patch validated and applied successfully. / パッチの検証と適用に成功しました。"
+
+      - name: Create branch and pull request (or update existing)
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -273,5 +292,5 @@ jobs:
             echo
             echo "_Automated changes are not merged automatically. / 自動生成された変更は自動ではマージされません。_"
           } > "$RUNNER_TEMP/issue-comment.md"
-          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/issue-comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/issue-comment.md" || true
           echo "[pr] Posted completion comment to issue #${ISSUE_NUMBER} / Issue #${ISSUE_NUMBER} に完了コメントを投稿しました"
