@@ -33,6 +33,8 @@ fn make_basic_device() -> DeviceConfig {
             process_id: 1,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        bgp: None,
+        static_routes: Vec::new(),
         unparsed_lines: Vec::new(),
     }
 }
@@ -43,6 +45,8 @@ fn test_hostname_generation() {
         hostname: "test-node".to_string(),
         interfaces: Vec::new(),
         ospf: None,
+        bgp: None,
+        static_routes: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -110,6 +114,8 @@ fn test_emit_warnings_for_unsupported_features() {
             process_id: 10,
             router_id: None,
         }),
+        bgp: None,
+        static_routes: Vec::new(),
         unparsed_lines: vec![ir::UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
             line_number: 12,

@@ -46,6 +46,19 @@ fn test_serde_serialization_deserialization() {
             process_id: 1,
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
+            neighbors: vec![BgpNeighbor {
+                remote_address: std::net::Ipv4Addr::new(10, 0, 0, 2),
+                remote_as: 65002,
+            }],
+            networks: vec!["10.0.0.0/24".parse().unwrap()],
+        }),
+        static_routes: vec![StaticRoute {
+            destination: "192.168.0.0/16".parse().unwrap(),
+            next_hop: std::net::Ipv4Addr::new(10, 0, 0, 2),
+        }],
         unparsed_lines: vec![UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
             line_number: 10,
@@ -68,6 +81,8 @@ fn test_golden_minimal() {
     assert_eq!(config.hostname, "router-minimal");
     assert!(config.interfaces.is_empty());
     assert!(config.ospf.is_none());
+    assert!(config.bgp.is_none());
+    assert!(config.static_routes.is_empty());
     assert!(config.unparsed_lines.is_empty());
 }
 

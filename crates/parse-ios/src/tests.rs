@@ -9,6 +9,8 @@ fn test_parse_empty_and_comments() {
     assert_eq!(device.hostname, "router");
     assert!(device.interfaces.is_empty());
     assert!(device.ospf.is_none());
+    assert!(device.bgp.is_none());
+    assert!(device.static_routes.is_empty());
     assert!(device.unparsed_lines.is_empty());
 }
 
@@ -110,6 +112,68 @@ router ospf 1
 }
 
 #[test]
+fn test_static_routes_parsing() {
+    let cfg = r#"
+hostname R_STATIC
+ip route 10.0.0.0 255.0.0.0 192.168.1.254
+ip route 0.0.0.0 0.0.0.0 192.168.1.1
+ip route 172.16.0.0 255.255.240.128 192.168.1.2
+"#;
+
+    let device = parse_ios_config(cfg, Some("static.cfg"));
+    assert_eq!(device.static_routes.len(), 2);
+    assert_eq!(
+        device.static_routes[0].destination.to_string(),
+        "10.0.0.0/8"
+    );
+    assert_eq!(
+        device.static_routes[0].next_hop,
+        Ipv4Addr::new(192, 168, 1, 254)
+    );
+    assert_eq!(device.static_routes[1].destination.to_string(), "0.0.0.0/0");
+    assert_eq!(
+        device.static_routes[1].next_hop,
+        Ipv4Addr::new(192, 168, 1, 1)
+    );
+
+    // One invalid mask static route
+    assert_eq!(device.unparsed_lines.len(), 1);
+    assert!(device.unparsed_lines[0]
+        .reason
+        .contains("invalid static route mask"));
+}
+
+#[test]
+fn test_bgp_parsing() {
+    let cfg = r#"
+hostname R_BGP
+!
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.252
+!
+router bgp 65001
+ bgp router-id 1.1.1.1
+ neighbor 10.0.0.2 remote-as 65002
+ network 192.168.1.0 mask 255.255.255.0
+!
+"#;
+
+    let device = parse_ios_config(cfg, Some("bgp.cfg"));
+    assert_eq!(device.hostname, "R_BGP");
+    assert!(device.ospf.is_none());
+
+    let bgp = device.bgp.as_ref().unwrap();
+    assert_eq!(bgp.as_number, 65001);
+    assert_eq!(bgp.router_id, Some(Ipv4Addr::new(1, 1, 1, 1)));
+    assert_eq!(bgp.neighbors.len(), 1);
+    assert_eq!(bgp.neighbors[0].remote_address, Ipv4Addr::new(10, 0, 0, 2));
+    assert_eq!(bgp.neighbors[0].remote_as, 65002);
+    assert_eq!(bgp.networks.len(), 1);
+    assert_eq!(bgp.networks[0].to_string(), "192.168.1.0/24");
+    assert!(device.unparsed_lines.is_empty());
+}
+
+#[test]
 fn test_unparsed_lines_and_line_numbers() {
     let cfg = r#"
 hostname R3
@@ -155,6 +219,11 @@ interface
 router ospf invalid
  router-id invalid
  network invalid
+router bgp invalid
+ bgp router-id invalid
+ neighbor invalid
+ network invalid
+ip route invalid
 "#;
 
     let device = parse_ios_config(cfg, Some("malformed.cfg"));
@@ -194,6 +263,7 @@ router ospf 1
  router-id 1.1.1.1
  network 10.0.0.0 0.0.0.255 area 0
 !
+ip route 192.168.0.0 255.255.0.0 10.0.0.2
 "#;
 
     let device = parse_ios_config(cfg, Some("test.cfg"));
@@ -206,4 +276,13 @@ router ospf 1
     assert_eq!(json_val["interfaces"][0]["ospf"]["area"], 0);
     assert_eq!(json_val["ospf"]["process-id"], 1);
     assert_eq!(json_val["ospf"]["router-id"], "1.1.1.1");
+    assert_eq!(
+        json_val["static-routes"][0]["destination"]["address"],
+        "192.168.0.0"
+    );
+    assert_eq!(
+        json_val["static-routes"][0]["destination"]["prefix-length"],
+        16
+    );
+    assert_eq!(json_val["static-routes"][0]["next-hop"], "10.0.0.2");
 }

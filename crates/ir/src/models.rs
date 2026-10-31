@@ -230,6 +230,35 @@ pub struct OspfProcess {
     pub router_id: Option<Ipv4Addr>,
 }
 
+/// Static IPv4 route configuration aligned with ietf-routing.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct StaticRoute {
+    pub destination: Ipv4Prefix,
+    pub next_hop: Ipv4Addr,
+}
+
+/// BGP neighbor peer configuration aligned with ietf-bgp.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpNeighbor {
+    pub remote_address: Ipv4Addr,
+    pub remote_as: u32,
+}
+
+/// BGP process configuration aligned with ietf-routing / ietf-bgp.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpProcess {
+    pub as_number: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub router_id: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbors: Vec<BgpNeighbor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<Ipv4Prefix>,
+}
+
 /// Unparsed or unsupported configuration line metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -250,6 +279,10 @@ pub struct DeviceConfig {
     pub interfaces: Vec<Interface>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf: Option<OspfProcess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bgp: Option<BgpProcess>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub static_routes: Vec<StaticRoute>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unparsed_lines: Vec<UnparsedLine>,
 }
