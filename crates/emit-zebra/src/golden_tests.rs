@@ -29,6 +29,8 @@ fn test_zebra_golden() {
             process_id: 1,
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        bgp: None,
+        static_routes: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 

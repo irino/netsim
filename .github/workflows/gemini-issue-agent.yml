@@ -3,6 +3,8 @@ name: Gemini Issue Agent
 on:
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -15,13 +17,20 @@ concurrency:
 jobs:
   coding-agent:
     if: >-
-      github.event.label.name == 'ai-task' &&
-      github.event.sender.login == github.repository_owner
+      (github.event_name == 'issues' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'ai-task' &&
+       github.event.sender.login == github.repository_owner) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.action == 'created' &&
+       !github.event.issue.pull_request &&
+       contains(github.event.issue.labels.*.name, 'ai-task') &&
+       github.event.comment.user.login == github.repository_owner &&
+       startsWith(github.event.comment.body, '/retry'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
     steps:
       - name: Checkout repository
@@ -29,6 +38,21 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+
+      - name: Post start status to Issue and log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          echo "[agent] Starting task for issue #${ISSUE_NUMBER}... / Issue #${ISSUE_NUMBER} のタスクを開始します..."
+          {
+            echo "### 🤖 Gemini Issue Agent"
+            echo
+            echo "**Status / 進捗状況:**"
+            echo "- 🚀 Started processing issue #${ISSUE_NUMBER}..."
+            echo "- 🚀 Issue #${ISSUE_NUMBER} の処理を開始しました..."
+          } > "$RUNNER_TEMP/start-comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/start-comment.md"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,7 +68,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Gemini SDK
-        run: python -m pip install --disable-pip-version-check "google-genai>=1.30,<2"
+        run: |
+          echo "[setup] Installing Google GenAI SDK... / Google GenAI SDK をインストール中..."
+          python -m pip install --disable-pip-version-check "google-genai>=1.30,<2"
 
       - name: Implement issue with Gemini
         env:
@@ -55,14 +81,18 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           MAX_AGENT_TURNS: "24"
         run: |
+          echo "[agent] Running Gemini Issue Agent... / Gemini Issue Agent を実行中..."
           python .github/scripts/gemini_issue_agent.py \
-            --report-output "$RUNNER_TEMP/agent-report.json"
+            --report-output "$RUNNER_TEMP/agent-report.json" \
+            --patch-output "$RUNNER_TEMP/agent.patch"
 
       - name: Validate and request bounded repairs
         id: validation
         env:
+          GH_TOKEN: ${{ github.token }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL_CONFIG: .github/gemini-models.json
           MAX_AGENT_TURNS: "16"
@@ -70,6 +100,7 @@ jobs:
         run: |
           set -uo pipefail
           for round in 0 1 2 3; do
+            echo "[validation] Starting validation round ${round}... / 検証ラウンド ${round} を開始します..."
             log="$RUNNER_TEMP/cargo-validation-${round}.log"
             {
               echo "### Validation round $round"
@@ -82,20 +113,93 @@ jobs:
             status=$?
             cat "$log"
             if [ "$status" -eq 0 ]; then
+              echo "[validation] Validation passed successfully! / 検証に成功しました！"
               echo "passed=true" >> "$GITHUB_OUTPUT"
-              exit 0
+              break
             fi
             if [ "$round" -eq 3 ]; then
-              echo "Validation failed after 3 repair attempts." >&2
+              echo "[validation] Validation failed after 3 repair attempts. / 3回の修復試行後も検証に失敗しました。" >&2
               exit "$status"
             fi
-            echo "Requesting repair round $((round + 1))..."
+            echo "[validation] Requesting repair round $((round + 1))... / 修復ラウンド $((round + 1)) を要求します..."
+            gh issue comment "$ISSUE_NUMBER" --body "⚠️ **Validation round $((round + 1)) failed. Attempting automated repair...** / **検証ラウンド $((round + 1)) に失敗しました。自動修復を試みています...**" || true
             python .github/scripts/gemini_issue_agent.py \
               --feedback-file "$log" \
-              --report-output "$RUNNER_TEMP/agent-report.json"
+              --report-output "$RUNNER_TEMP/agent-report.json" \
+              --patch-output "$RUNNER_TEMP/agent.patch"
           done
 
-      - name: Create branch, commit, and pull request
+      - name: Generate final patch
+        run: |
+          echo "[patch] Generating final patch from working tree... / 作業ツリーから最終パッチを生成中..."
+          git status --porcelain --untracked-files=all | while IFS= read -r line; do
+            if [[ "$line" =~ ^\?\?\ (.*) ]]; then
+              git add -N -- "${BASH_REMATCH[1]}"
+            fi
+          done
+          git diff --binary HEAD > "$RUNNER_TEMP/agent.patch"
+          if [ ! -s "$RUNNER_TEMP/agent.patch" ]; then
+            echo "[patch] Error: No changes produced / エラー: 変更が生成されませんでした" >&2
+            exit 1
+          fi
+          echo "[patch] Patch generated: $(wc -c < "$RUNNER_TEMP/agent.patch") bytes / パッチ生成完了: $(wc -c < "$RUNNER_TEMP/agent.patch") バイト"
+
+      - name: Upload agent artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-artifact-${{ github.event.issue.number }}
+          path: |
+            ${{ runner.temp }}/agent.patch
+            ${{ runner.temp }}/agent-report.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Report failure to Issue and log
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          echo "[error] Execution or validation failed / 実行または検証に失敗しました" >&2
+          {
+            echo "### ❌ Gemini Issue Agent"
+            echo
+            echo "**Status / 状態:** Failed / 失敗"
+            echo
+            echo "The agent encountered an error during execution or validation. Please check the Actions workflow run logs for details."
+            echo
+            echo "エージェントの実行または検証中にエラーが発生しました。詳細は Actions のワークフロー実行ログを確認してください。"
+          } > "$RUNNER_TEMP/failure-comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/failure-comment.md" || true
+
+  create-pr:
+    needs: coding-agent
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download agent artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-artifact-${{ github.event.issue.number }}
+          path: ${{ runner.temp }}
+
+      - name: Apply agent patch
+        run: |
+          echo "[pr] Applying patch from artifact... / アーティファクトからパッチを適用しています..."
+          git apply --binary --whitespace=nowarn "${{ runner.temp }}/agent.patch"
+          echo "[pr] Patch applied successfully. / パッチを正常に適用しました。"
+
+      - name: Create branch and pull request
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,10 +211,14 @@ jobs:
           BRANCH="ai/issue-${ISSUE_NUMBER}-gemini"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add -A
-          git diff --cached --quiet && { echo "No changes to publish" >&2; exit 1; }
+          git diff --cached --quiet && {
+            echo "[pr] No changes to publish / 公開する変更がありません" >&2
+            exit 1
+          }
           git commit -m "AI: address issue #${ISSUE_NUMBER}"
+          echo "[pr] Pushing branch $BRANCH... / ブランチ $BRANCH をプッシュ中..."
           git push --force-with-lease origin "$BRANCH"
 
           TITLE="$(jq -r '.pr_title // "AI changes for issue"' "$REPORT_FILE")"
@@ -129,7 +237,16 @@ jobs:
             echo
             echo "Closes #${ISSUE_NUMBER}"
           } > "$RUNNER_TEMP/pr-body.md"
-          PR_URL="$(gh pr create --base "$BASE_REF" --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/pr-body.md")"
+
+          EXISTING_PR="$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --title "$TITLE" --body-file "$RUNNER_TEMP/pr-body.md"
+            PR_URL="$EXISTING_PR"
+            echo "[pr] Updated existing PR: $PR_URL / 既存のPRを更新しました: $PR_URL"
+          else
+            PR_URL="$(gh pr create --base "$BASE_REF" --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/pr-body.md")"
+            echo "[pr] Created PR: $PR_URL / PRを作成しました: $PR_URL"
+          fi
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Comment on Issue
@@ -142,14 +259,19 @@ jobs:
           SUMMARY_EN="$(jq -r '.summary_en // "The agent completed the task."' "$REPORT_FILE")"
           SUMMARY_JA="$(jq -r '.summary_ja // "Agentがタスクを完了しました。"' "$REPORT_FILE")"
           {
-            echo "## Gemini Issue Agent"
+            echo "## 🤖 Gemini Issue Agent"
             echo
+            echo "**Status / 状態:** Completed successfully / 正常に完了しました"
+            echo
+            echo "### Summary / 概要"
             echo "$SUMMARY_EN"
             echo
             echo "$SUMMARY_JA"
             echo
-            echo "Pull Request: $PR_URL"
+            echo "### Pull Request / プルリクエスト"
+            echo "$PR_URL"
             echo
-            echo "_Automated changes are not merged automatically._"
+            echo "_Automated changes are not merged automatically. / 自動生成された変更は自動ではマージされません。_"
           } > "$RUNNER_TEMP/issue-comment.md"
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/issue-comment.md"
+          echo "[pr] Posted completion comment to issue #${ISSUE_NUMBER} / Issue #${ISSUE_NUMBER} に完了コメントを投稿しました"
