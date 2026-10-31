@@ -1,0 +1,17 @@
+name: golden-lab
+topology:
+  nodes:
+    r1:
+      kind: linux
+      image: zebra-rs:latest
+      binds:
+      - ./r1.zebra.yaml:/etc/zebra-rs/zebra.yaml
+    r2:
+      kind: linux
+      image: zebra-rs:latest
+      binds:
+      - ./r2.zebra.yaml:/etc/zebra-rs/zebra.yaml
+  links:
+  - endpoints:
+    - r1:eth1
+    - r2:eth1
