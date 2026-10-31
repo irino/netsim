@@ -1,0 +1,155 @@
+name: Gemini Issue Agent
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: gemini-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  coding-agent:
+    if: >-
+      github.event.label.name == 'ai-task' &&
+      github.event.sender.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Gemini SDK
+        run: python -m pip install --disable-pip-version-check "google-genai>=1.30,<2"
+
+      - name: Implement issue with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_CONFIG: .github/gemini-models.json
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          MAX_AGENT_TURNS: "24"
+        run: |
+          python .github/scripts/gemini_issue_agent.py \
+            --report-output "$RUNNER_TEMP/agent-report.json"
+
+      - name: Validate and request bounded repairs
+        id: validation
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_CONFIG: .github/gemini-models.json
+          MAX_AGENT_TURNS: "16"
+          MAX_REPAIR_ROUNDS: "3"
+        run: |
+          set -uo pipefail
+          for round in 0 1 2 3; do
+            log="$RUNNER_TEMP/cargo-validation-${round}.log"
+            {
+              echo "### Validation round $round"
+              cargo fmt --all &&
+              cargo fmt --all -- --check &&
+              cargo check --workspace --all-targets &&
+              cargo test --workspace &&
+              cargo clippy --workspace --all-targets -- -D warnings
+            } >"$log" 2>&1
+            status=$?
+            cat "$log"
+            if [ "$status" -eq 0 ]; then
+              echo "passed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$round" -eq 3 ]; then
+              echo "Validation failed after 3 repair attempts." >&2
+              exit "$status"
+            fi
+            echo "Requesting repair round $((round + 1))..."
+            python .github/scripts/gemini_issue_agent.py \
+              --feedback-file "$log" \
+              --report-output "$RUNNER_TEMP/agent-report.json"
+          done
+
+      - name: Create branch, commit, and pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          BASE_REF: ${{ github.event.repository.default_branch }}
+          REPORT_FILE: ${{ runner.temp }}/agent-report.json
+        run: |
+          set -euo pipefail
+          BRANCH="ai/issue-${ISSUE_NUMBER}-gemini"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git diff --cached --quiet && { echo "No changes to publish" >&2; exit 1; }
+          git commit -m "AI: address issue #${ISSUE_NUMBER}"
+          git push --force-with-lease origin "$BRANCH"
+
+          TITLE="$(jq -r '.pr_title // "AI changes for issue"' "$REPORT_FILE")"
+          SUMMARY_EN="$(jq -r '.summary_en // "Automated changes for the linked issue."' "$REPORT_FILE")"
+          SUMMARY_JA="$(jq -r '.summary_ja // "関連Issueに対する自動変更です。"' "$REPORT_FILE")"
+          {
+            echo "## Summary"
+            echo "$SUMMARY_EN"
+            echo
+            echo "$SUMMARY_JA"
+            echo
+            echo "## Validation"
+            echo "Passed: cargo fmt, cargo check, cargo test, cargo clippy."
+            echo
+            echo "成功: cargo fmt、cargo check、cargo test、cargo clippy。"
+            echo
+            echo "Closes #${ISSUE_NUMBER}"
+          } > "$RUNNER_TEMP/pr-body.md"
+          PR_URL="$(gh pr create --base "$BASE_REF" --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/pr-body.md")"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          REPORT_FILE: ${{ runner.temp }}/agent-report.json
+        run: |
+          SUMMARY_EN="$(jq -r '.summary_en // "The agent completed the task."' "$REPORT_FILE")"
+          SUMMARY_JA="$(jq -r '.summary_ja // "Agentがタスクを完了しました。"' "$REPORT_FILE")"
+          {
+            echo "## Gemini Issue Agent"
+            echo
+            echo "$SUMMARY_EN"
+            echo
+            echo "$SUMMARY_JA"
+            echo
+            echo "Pull Request: $PR_URL"
+            echo
+            echo "_Automated changes are not merged automatically._"
+          } > "$RUNNER_TEMP/issue-comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/issue-comment.md"
