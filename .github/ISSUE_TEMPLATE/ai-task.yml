@@ -1,0 +1,35 @@
+name: AI coding task
+description: Request an implementation by the Gemini Issue Agent
+title: "[AI] "
+labels: ["ai-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe a focused task. The Gemini agent treats this content as untrusted input,
+        inspects the repository, makes changes, runs checks, and opens a PR.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be implemented or fixed?
+      placeholder: Describe the expected behavior in English.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable conditions that define completion.
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and constraints
+      description: Relevant modules, constraints, or non-goals.
+    validations:
+      required: false

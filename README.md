@@ -10,6 +10,7 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
 - `crates/netsim-cli`: Unified command-line interface providing `convert` and `gen-lab` subcommands.
+- `examples/`: Synthetic example configurations demonstrating multi-device network topologies (e.g., `examples/ospf-3routers`).
 
 ## CLI Usage (`crates/netsim-cli`)
 
@@ -29,7 +30,7 @@ Options:
 Processes a directory of vendor configuration files, infers the interconnecting topology, and outputs all zebra-rs configuration files, a Containerlab topology definition, and a diagnostic markdown report:
 
 ```bash
-cargo run --bin netsim -- gen-lab --configs ./configs/ --out ./lab/ --lab-name my-lab
+cargo run --bin netsim -- gen-lab --configs ./examples/ospf-3routers/ --out ./lab/ --lab-name ospf-lab
 ```
 
 Outputs generated in `--out`:
