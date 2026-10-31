@@ -23,6 +23,21 @@ pub struct ZebraSystem {
     pub hostname: String,
 }
 
+/// zebra-rs static route entry (`ip -> route`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraStaticRoute {
+    pub destination: String,
+    #[serde(rename = "next-hop")]
+    pub next_hop: Ipv4Addr,
+}
+
+/// zebra-rs IP level configuration container (`ip`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraIp {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub route: Vec<ZebraStaticRoute>,
+}
+
 /// zebra-rs IPv4 interface address container (`interface -> ipv4`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraInterfaceIpv4 {
@@ -67,17 +82,43 @@ pub struct ZebraOspf {
     pub area: Vec<ZebraOspfArea>,
 }
 
+/// zebra-rs BGP neighbor configuration (`router -> bgp -> neighbor`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgpNeighbor {
+    pub peer_address: Ipv4Addr,
+    pub remote_as: u32,
+}
+
+/// zebra-rs BGP protocol configuration (`router -> bgp`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgp {
+    #[serde(rename = "as")]
+    pub as_number: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub router_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub neighbor: Vec<ZebraBgpNeighbor>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub network: Vec<String>,
+}
+
 /// zebra-rs routing protocols container (`router`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraRouter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf: Option<ZebraOspf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bgp: Option<ZebraBgp>,
 }
 
 /// Root configuration representation for zebra-rs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraConfig {
     pub system: ZebraSystem,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<ZebraIp>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub interface: Vec<ZebraInterface>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +138,26 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
 
     let system = ZebraSystem {
         hostname: device.hostname.clone(),
+    };
+
+    // Static routes under `ip -> route`
+    let ip = if !device.static_routes.is_empty() {
+        let mut routes: Vec<ZebraStaticRoute> = device
+            .static_routes
+            .iter()
+            .map(|r| ZebraStaticRoute {
+                destination: r.destination.to_string(),
+                next_hop: r.next_hop,
+            })
+            .collect();
+        routes.sort_by(|a, b| {
+            a.destination
+                .cmp(&b.destination)
+                .then_with(|| a.next_hop.cmp(&b.next_hop))
+        });
+        Some(ZebraIp { route: routes })
+    } else {
+        None
     };
 
     // Interfaces sorted deterministically by name
@@ -182,7 +243,8 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         });
     }
 
-    let router = if let Some(ref ospf_proc) = device.ospf {
+    // OSPF configuration
+    let ospf = if let Some(ref ospf_proc) = device.ospf {
         let mut areas = Vec::new();
         for (area_id, mut ospf_ifaces) in ospf_by_area {
             ospf_ifaces.sort_by(|a, b| a.name.cmp(&b.name));
@@ -192,11 +254,9 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             });
         }
 
-        Some(ZebraRouter {
-            ospf: Some(ZebraOspf {
-                router_id: ospf_proc.router_id,
-                area: areas,
-            }),
+        Some(ZebraOspf {
+            router_id: ospf_proc.router_id,
+            area: areas,
         })
     } else if !ospf_by_area.is_empty() {
         let mut areas = Vec::new();
@@ -208,12 +268,41 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             });
         }
 
-        Some(ZebraRouter {
-            ospf: Some(ZebraOspf {
-                router_id: None,
-                area: areas,
-            }),
+        Some(ZebraOspf {
+            router_id: None,
+            area: areas,
         })
+    } else {
+        None
+    };
+
+    // BGP configuration
+    let bgp = if let Some(ref bgp_proc) = device.bgp {
+        let mut neighbors: Vec<ZebraBgpNeighbor> = bgp_proc
+            .neighbors
+            .iter()
+            .map(|n| ZebraBgpNeighbor {
+                peer_address: n.remote_address,
+                remote_as: n.remote_as,
+            })
+            .collect();
+        neighbors.sort_by(|a, b| a.peer_address.cmp(&b.peer_address));
+
+        let mut networks: Vec<String> = bgp_proc.networks.iter().map(|p| p.to_string()).collect();
+        networks.sort();
+
+        Some(ZebraBgp {
+            as_number: bgp_proc.as_number,
+            router_id: bgp_proc.router_id,
+            neighbor: neighbors,
+            network: networks,
+        })
+    } else {
+        None
+    };
+
+    let router = if ospf.is_some() || bgp.is_some() {
+        Some(ZebraRouter { ospf, bgp })
     } else {
         None
     };
@@ -224,6 +313,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
     (
         ZebraConfig {
             system,
+            ip,
             interface: interfaces,
             router,
         },

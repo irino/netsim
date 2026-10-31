@@ -79,7 +79,7 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          MAX_AGENT_TURNS: "128"
+          MAX_AGENT_TURNS: "24"
         run: |
           echo "[agent] Running Gemini Issue Agent... / Gemini Issue Agent を実行中..."
           python .github/scripts/gemini_issue_agent.py \
