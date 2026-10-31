@@ -24,7 +24,7 @@ MAX_TOTAL_READ_BYTES = 700_000
 MAX_WRITE_BYTES = 180_000
 MAX_TOOL_CALLS = 80
 MAX_RETRIES_PER_MODEL = 3
-INITIAL_RETRY_DELAY = 2.0
+INITIAL_RETRY_DELAY = 30.0
 
 SYSTEM_PROMPT = """You are an autonomous senior Rust engineer working in a public GitHub repository.
 All reasoning, tool arguments, and tool interactions must be in English.
