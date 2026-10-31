@@ -3,6 +3,18 @@
 version = 4
 
 [[package]]
+name = "emit-clab"
+version = "0.1.0"
+dependencies = [
+ "emit-zebra",
+ "ir",
+ "serde",
+ "serde_yaml",
+ "thiserror",
+ "topology",
+]
+
+[[package]]
 name = "emit-zebra"
 version = "0.1.0"
 dependencies = [

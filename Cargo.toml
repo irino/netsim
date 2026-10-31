@@ -4,5 +4,6 @@ members = [
     "crates/parse-ios",
     "crates/topology",
     "crates/emit-zebra",
+    "crates/emit-clab",
 ]
 resolver = "2"
