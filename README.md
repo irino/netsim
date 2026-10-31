@@ -9,13 +9,40 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
+- `crates/netsim-cli`: Unified command-line interface providing `convert` and `gen-lab` subcommands.
+
+## CLI Usage (`crates/netsim-cli`)
+
+### 1. `convert`
+Converts a single vendor configuration file into a zebra-rs YAML configuration:
+
+```bash
+cargo run --bin netsim -- convert --vendor ios --in R1.cfg --out R1.zebra.yaml
+```
+
+Options:
+- `--vendor <ios>`: Input vendor configuration format (defaults to `ios`).
+- `--in <FILE>`: Path to the input vendor configuration.
+- `--out <FILE>`: Path to the destination zebra-rs YAML configuration.
+
+### 2. `gen-lab`
+Processes a directory of vendor configuration files, infers the interconnecting topology, and outputs all zebra-rs configuration files, a Containerlab topology definition, and a diagnostic markdown report:
+
+```bash
+cargo run --bin netsim -- gen-lab --configs ./configs/ --out ./lab/ --lab-name my-lab
+```
+
+Outputs generated in `--out`:
+- `<hostname>.zebra.yaml`: Node configuration for each parsed router.
+- `topology.clab.yml`: Containerlab topology file with brief point-to-point interface bindings.
+- `report.md`: Markdown summary detailing processed devices, inferred links, topology warnings, and unparsed/unsupported configuration lines.
 
 ## CI & Quality Checks
 
 This repository uses GitHub Actions CI to ensure code quality. Every pull request targeting `main` and pushes to `main` must pass the automated checks:
 
 - `cargo fmt --all -- --check` (Code formatting)
-- `cargo test --workspace` (Unit & Golden tests)
+- `cargo test --workspace` (Unit, Golden, and Integration tests)
 - `cargo clippy --workspace --all-targets -- -D warnings` (Clippy lint checks)
 
 ### Running Checks Locally
