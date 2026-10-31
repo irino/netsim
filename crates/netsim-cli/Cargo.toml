@@ -1,0 +1,17 @@
+[package]
+name = "netsim-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "netsim"
+path = "src/main.rs"
+
+[dependencies]
+ir = { path = "../ir" }
+parse-ios = { path = "../parse-ios" }
+topology = { path = "../topology" }
+emit-zebra = { path = "../emit-zebra" }
+emit-clab = { path = "../emit-clab" }
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"
