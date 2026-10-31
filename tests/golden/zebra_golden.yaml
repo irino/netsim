@@ -1,0 +1,19 @@
+system:
+  hostname: router-golden
+interface:
+- name: eth1
+  ipv4:
+    address:
+    - 10.0.1.1/24
+- name: eth2
+  ipv4:
+    address:
+    - 192.168.100.1/24
+router:
+  ospf:
+    router-id: 1.1.1.1
+    area:
+    - area-id: '0'
+      interface:
+      - name: eth1
+        enabled: true

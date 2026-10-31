@@ -2,11 +2,18 @@
 
 A Rust-based multi-vendor network configuration translator and network emulation generator.
 
+## Project Workspace Structure
+
+- `crates/ir`: Vendor-independent Intermediate Representation data models (`DeviceConfig`, `Interface`, `OspfProcess`, `UnparsedLine`, `Ipv4Prefix`, `PrefixLength`, `OspfAreaId`) aligned with IETF YANG models.
+- `crates/parse-ios`: Cisco IOS configuration parser built with `winnow`.
+- `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
+- `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
+
 ## CI & Quality Checks
 
 This repository uses GitHub Actions CI to ensure code quality. Every pull request targeting `main` and pushes to `main` must pass the automated checks:
 
-- `cargo fmt --check` (Code formatting)
+- `cargo fmt --all -- --check` (Code formatting)
 - `cargo test --workspace` (Unit & Golden tests)
 - `cargo clippy --workspace --all-targets -- -D warnings` (Clippy lint checks)
 
@@ -15,7 +22,7 @@ This repository uses GitHub Actions CI to ensure code quality. Every pull reques
 Contributors can run the same checks locally prior to submitting pull requests:
 
 ```bash
-cargo fmt --check
+cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -36,3 +43,27 @@ The initial Cisco IOS parser supports:
   - Network statements: `network <ADDRESS> <WILDCARD> area <AREA>` (supports integer and dotted-quad area IDs, as well as non-contiguous wildcard mask bitwise matching).
 
 Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## zebra-rs YAML Configuration Emitter (`crates/emit-zebra`)
+
+`crates/emit-zebra` converts `ir::DeviceConfig` into zebra-rs declarative YAML configurations based on the schema documented at https://zebra.rs/:
+
+- **System**:
+  - `system.hostname`
+- **Interfaces**:
+  - `interface[].name`
+  - `interface[].ipv4.address[]` (`A.B.C.D/prefix`)
+- **OSPFv2**:
+  - `router.ospf.router-id`
+  - `router.ospf.area[].area-id`
+  - `router.ospf.area[].interface[].name`
+  - `router.ospf.area[].interface[].enabled`
+  - `router.ospf.area[].interface[].cost`
+  - `router.ospf.area[].interface[].passive`
+
+### Schema Restrictions & Diagnostics
+zebra-rs binds configuration to existing kernel devices and models protocol participation declaratively:
+- **Interface descriptions**: Not representable in the top-level zebra-rs `interface` schema; emitted as diagnostic `interface-description` warnings.
+- **Shutdown / Admin-Down state**: zebra-rs top-level interfaces do not have an administrative-down state knob; emitted as diagnostic `interface-disabled` warnings.
+- **Multiple OSPF process IDs**: zebra-rs configures single-instance OSPF under `router.ospf`; process IDs $\ne 1$ emit `ospf-process-id` warnings.
+- **Unparsed lines**: All unparsed lines from upstream parsers are propagated through `EmitWarning` diagnostics so no configuration is silently discarded.
