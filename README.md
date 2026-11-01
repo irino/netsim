@@ -11,6 +11,7 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
 - `crates/netsim-cli`: Unified command-line interface providing `convert` and `gen-lab` subcommands.
+- `crates/validate-yang`: Automated IETF YANG schema validation and drift testing engine backed by `libyang` (`yang3` and `holo-yang`).
 - `examples/`: Synthetic example configurations demonstrating multi-device network topologies (e.g., `examples/ospf-3routers`).
 
 ## Step-by-Step Usage Guide
@@ -128,6 +129,40 @@ docker exec -it clab-mixed-lab-cisco-r1 ping -c 3 2.2.2.2
 ```bash
 sudo containerlab destroy -t lab-mixed/topology.clab.yml
 ```
+
+## IETF YANG Schema Validation & Drift Testing (`crates/validate-yang`)
+
+The project aligns its vendor-independent IR (`crates/ir`) with standard IETF YANG data models. `crates/validate-yang` provides automated validation against pinned upstream YANG schemas using `yang3` (libyang bindings) and `holo-yang`:
+
+### Pinned Upstream YANG Modules & Revisions
+- `ietf-interfaces@2018-02-20` (RFC 8343: Interface Management)
+- `ietf-ip@2018-02-22` (RFC 8344: IP Management)
+- `ietf-routing@2018-03-13` (RFC 8349 NMDA: Routing Management)
+- `ietf-ipv4-unicast-routing@2018-03-13` (RFC 8349 NMDA: IPv4 Unicast Routing)
+- `ietf-ospf@2022-10-19` (RFC 9129: OSPF Protocol)
+- `ietf-bgp@2023-07-05` (BGP-4 Model)
+- `iana-if-type@2017-01-19` (RFC 7224: IANA Interface Types)
+- `iana-routing-types@2018-10-29` (RFC 8294: IANA Routing Types)
+
+All modules are vendored/embedded through `holo-yang`, avoiding unauthenticated or flaking external network calls during build and test execution.
+
+### IR to RFC 7951 Mapping & Limitations
+`validate_device_config` maps netsim IR instances into standard YANG JSON:
+- **Interfaces**: Mapped to `ietf-interfaces:interfaces/interface[]` with `name`, `type` (`iana-if-type`), `enabled`, `description`, and `ietf-ip:ipv4/address[]`.
+- **OSPF**: Mapped under `ietf-routing:routing/control-plane-protocols/control-plane-protocol[type='ietf-ospf:ospfv2']` with `explicit-router-id` and `areas/area[]/interfaces/interface[]`.
+- **BGP**: Mapped under `ietf-routing:routing/control-plane-protocols/control-plane-protocol[type='ietf-bgp:bgp']` with `global` (`as`, `identifier`) and `neighbors/neighbor[]` (`remote-address`, `peer-as`).
+- **Static Routes**: Mapped under `ietf-routing:routing/control-plane-protocols/control-plane-protocol[type='ietf-routing:static']` with `static-routes/ietf-ipv4-unicast-routing:ipv4/route[]` (`destination-prefix`, `next-hop/next-hop-address`).
+- **Uncovered Fields / Limitations**:
+  - `hostname`: Modeled under `ietf-system` (RFC 7317), not `ietf-interfaces` or `ietf-routing`.
+  - `bgp.networks`: BGP prefix origination/export in IETF BGP is governed by `ietf-routing-policy` (RFC 9067), which is outside current parser and IR scope.
+  - `unparsed_lines`: Diagnostic syntax preservation metadata without a direct IETF YANG equivalent.
+
+### Schema Drift Tests
+The test suite in `crates/validate-yang` validates:
+1. Valid IR conversions against golden samples (`device_config_full`, `cisco_ios_basic`, `junos_basic`, multi-protocol configurations).
+2. Schema constraint failures (invalid IPv4 addresses, out-of-range prefix lengths $>32$, invalid OSPF area-ids).
+3. Mandatory missing node detection (`name`, `type`).
+4. Detection of schema drift or unexpected data model mutations.
 
 ## CI & Quality Checks
 
