@@ -286,7 +286,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
                 remote_as: n.remote_as,
             })
             .collect();
-        neighbors.sort_by(|a, b| a.peer_address.cmp(&b.peer_address));
+        neighbors.sort_by_key(|a| a.peer_address);
 
         let mut networks: Vec<String> = bgp_proc.networks.iter().map(|p| p.to_string()).collect();
         networks.sort();
