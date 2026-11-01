@@ -7,6 +7,12 @@ This directory contains sample network configurations demonstrating the Phase 1 
 ### `ospf-3routers`
 A 3-router triangle topology (`R1`, `R2`, `R3`) interconnected via point-to-point `/24` IPv4 subnets running OSPFv2 (Area 0).
 
+### `ebgp-2routers`
+A 2-router point-to-point eBGP peering scenario between AS 65001 and AS 65002 with route advertisements and static routes.
+
+### `mixed-ios-junos`
+A multi-vendor point-to-point OSPF network connecting a Cisco IOS router (`cisco-r1.cfg`) and a Junos router (`junos-r2.set`) running OSPFv2 over a `/30` point-to-point link.
+
 - **Topology Summary**:
   - `R1`: Loopback0 (`1.1.1.1/32`), GigabitEthernet0/0 (`10.0.12.1/24` -> R2), GigabitEthernet0/1 (`10.0.13.1/24` -> R3)
   - `R2`: Loopback0 (`2.2.2.2/32`), GigabitEthernet0/0 (`10.0.12.2/24` -> R1), GigabitEthernet0/1 (`10.0.23.2/24` -> R3)
@@ -17,7 +23,9 @@ A 3-router triangle topology (`R1`, `R2`, `R3`) interconnected via point-to-poin
 
 ## 2. Required Input Files
 
-Each device configuration file (e.g. `.cfg`, `.conf`, or `.txt`) must follow supported Cisco IOS syntax:
+Each device configuration file (e.g. `.cfg`, `.set`, `.conf`, or `.txt`) must follow supported vendor syntax:
+
+### Cisco IOS Syntax (`.cfg`, `.conf`, `.txt`)
 - **Hostname**: `hostname <NAME>`
 - **Interfaces**:
   - Loopback and physical interfaces: `interface <NAME>`
@@ -28,6 +36,22 @@ Each device configuration file (e.g. `.cfg`, `.conf`, or `.txt`) must follow sup
   - `router ospf <PROCESS_ID>`
   - `router-id <A.B.C.D>`
   - `network <ADDRESS> <WILDCARD> area <AREA>`
+- **BGP / Static Routes**:
+  - `ip route <DEST> <MASK> <NEXT_HOP>`
+  - `router bgp <AS>` (`bgp router-id`, `neighbor <IP> remote-as <AS>`, `network <IP> mask <MASK>`)
+
+### Junos Set-Format Syntax (`.set`, `.conf`, `.txt`)
+- **Hostname**: `set system host-name <NAME>`
+- **Interfaces**:
+  - `set interfaces <NAME> unit <UNIT> family inet address <IP/LEN>`
+  - `description`, `disable`
+- **Routing Options**:
+  - `set routing-options router-id <IP>`
+  - `set routing-options autonomous-system <AS>`
+  - `set routing-options static route <DEST/LEN> next-hop <NEXT_HOP>`
+- **Protocols**:
+  - `set protocols ospf area <AREA> interface <NAME> [metric <COST>] [passive]`
+  - `set protocols bgp group <GROUP> neighbor <IP> peer-as <AS>`
 
 ---
 

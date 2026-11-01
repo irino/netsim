@@ -13,31 +13,121 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/netsim-cli`: Unified command-line interface providing `convert` and `gen-lab` subcommands.
 - `examples/`: Synthetic example configurations demonstrating multi-device network topologies (e.g., `examples/ospf-3routers`).
 
-## CLI Usage (`crates/netsim-cli`)
+## Step-by-Step Usage Guide
 
-### 1. `convert`
-Converts a single vendor configuration file into a zebra-rs YAML configuration:
+### Prerequisites
 
+- **Rust toolchain**: 1.80+ (`rustup default stable`)
+- **Containerlab**: (optional, for deploying emulation environments) [Install guide](https://containerlab.dev/install/)
+- **Docker**: (optional, required by Containerlab)
+- **zebra-rs container image**: `zebra-rs:latest` built or pulled locally.
+
+---
+
+### 1. Translating a Single Configuration (`convert`)
+
+To translate a single Cisco IOS or Junos configuration into a declarative zebra-rs YAML configuration, use the `convert` subcommand:
+
+#### Cisco IOS Example:
 ```bash
-cargo run --bin netsim -- convert --vendor ios --in R1.cfg --out R1.zebra.yaml
+cargo run --bin netsim -- convert \
+  --vendor ios \
+  --in examples/ospf-3routers/R1.cfg \
+  --out R1.zebra.yaml
 ```
 
-Options:
-- `--vendor <ios|junos>`: Input vendor configuration format (defaults to `ios`).
-- `--in <FILE>`: Path to the input vendor configuration.
-- `--out <FILE>`: Path to the destination zebra-rs YAML configuration.
-
-### 2. `gen-lab`
-Processes a directory of vendor configuration files, infers the interconnecting topology, and outputs all zebra-rs configuration files, a Containerlab topology definition, and a diagnostic markdown report:
-
+#### Junos (set-format) Example:
 ```bash
-cargo run --bin netsim -- gen-lab --configs ./examples/ospf-3routers/ --out ./lab/ --lab-name ospf-lab
+cargo run --bin netsim -- convert \
+  --vendor junos \
+  --in examples/mixed-ios-junos/junos-r2.set \
+  --out junos-r2.zebra.yaml
 ```
 
-Outputs generated in `--out`:
-- `<hostname>.zebra.yaml`: Node configuration for each parsed router.
-- `topology.clab.yml`: Containerlab topology file with brief point-to-point interface bindings.
-- `report.md`: Markdown summary detailing processed devices, inferred links, topology warnings, and unparsed/unsupported configuration lines.
+**Options**:
+- `--vendor <ios|junos>`: Input vendor configuration format (`ios` or `junos`; default: `ios`).
+- `--in <FILE>`: Path to the input vendor configuration file.
+- `--out <FILE>`: Destination path for the generated zebra-rs YAML configuration.
+
+Any unparsed commands or emitter warnings are printed to `stderr` with line numbers and reasons.
+
+---
+
+### 2. Generating Complete Emulation Labs (`gen-lab`)
+
+The `gen-lab` command processes a folder containing multiple router configurations (`.cfg`, `.set`, `.conf`, or `.txt`), automatically identifies the vendor for each file, infers point-to-point links between subnets, emits all node configurations, builds a Containerlab topology definition, and produces a diagnostic report.
+
+#### Running on Homogeneous or Mixed-Vendor Topologies:
+
+```bash
+# 3-router Cisco IOS OSPF triangle
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/ospf-3routers/ \
+  --out ./lab-ospf/ \
+  --lab-name ospf-lab
+
+# 2-router Cisco IOS eBGP peering
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/ebgp-2routers/ \
+  --out ./lab-ebgp/ \
+  --lab-name ebgp-lab
+
+# Mixed Cisco IOS and Junos multi-vendor topology
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/mixed-ios-junos/ \
+  --out ./lab-mixed/ \
+  --lab-name mixed-lab
+```
+
+**Options**:
+- `--configs <DIR>`: Directory containing router configuration files.
+- `--out <DIR>`: Output directory for generated artifacts.
+- `--lab-name <NAME>`: Name of the Containerlab topology (defaults to `netsim-lab`).
+
+#### Generated Output Structure:
+```
+lab-mixed/
+├── cisco-r1.zebra.yaml       # zebra-rs YAML configuration for cisco-r1
+├── junos-r2.zebra.yaml       # zebra-rs YAML configuration for junos-r2
+├── topology.clab.yml         # Containerlab topology file
+└── report.md                 # Diagnostic markdown report
+```
+
+---
+
+### 3. Deploying and Verifying with Containerlab
+
+Once the lab files are generated, deploy the environment and inspect live routing protocols:
+
+#### Step 1: Deploy the Lab
+```bash
+sudo containerlab deploy -t lab-mixed/topology.clab.yml
+```
+
+#### Step 2: Verify Protocol Adjacency & Routing State
+Use `docker exec` to access `vtyctl` within any router container:
+
+```bash
+# Inspect OSPF neighbors on cisco-r1:
+docker exec -it clab-mixed-lab-cisco-r1 vtyctl show ip ospf neighbor
+
+# Inspect routing tables:
+docker exec -it clab-mixed-lab-cisco-r1 vtyctl show ip route
+
+# Inspect OSPF state on junos-r2:
+docker exec -it clab-mixed-lab-junos-r2 vtyctl show ip ospf interface
+```
+
+#### Step 3: Test Data-Plane Connectivity
+```bash
+# Ping junos-r2 loopback (2.2.2.2) from cisco-r1:
+docker exec -it clab-mixed-lab-cisco-r1 ping -c 3 2.2.2.2
+```
+
+#### Step 4: Destroy the Lab
+```bash
+sudo containerlab destroy -t lab-mixed/topology.clab.yml
+```
 
 ## CI & Quality Checks
 

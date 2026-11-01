@@ -1,0 +1,7 @@
+set system host-name "junos-r2"
+set interfaces lo0 unit 0 family inet address 2.2.2.2/32
+set interfaces ge-0/0/0 description "Link to cisco-r1"
+set interfaces ge-0/0/0 unit 0 family inet address 10.0.0.2/30
+set routing-options router-id 2.2.2.2
+set protocols ospf area 0.0.0.0 interface ge-0/0/0.0
+set protocols ospf area 0.0.0.0 interface lo0.0 passive
