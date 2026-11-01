@@ -1,0 +1,38 @@
+{
+  "hostname": "JUNOS-GOLDEN",
+  "interfaces": [
+    {
+      "name": "ge-0/0/0.0",
+      "description": "Primary Interface",
+      "enabled": true,
+      "ipv4": {
+        "address": "10.0.1.1",
+        "prefix-length": 24
+      },
+      "ospf": {
+        "area": "0.0.0.0"
+      }
+    },
+    {
+      "name": "ge-0/0/1.0",
+      "description": "Secondary Interface",
+      "enabled": false,
+      "ipv4": {
+        "address": "192.168.100.1",
+        "prefix-length": 24
+      }
+    }
+  ],
+  "ospf": {
+    "process-id": 1,
+    "router-id": "1.1.1.1"
+  },
+  "unparsed-lines": [
+    {
+      "file-path": "junos_basic.set",
+      "line-number": 9,
+      "content": "set unsupported junos command test",
+      "reason": "unsupported or unrecognized Junos command"
+    }
+  ]
+}

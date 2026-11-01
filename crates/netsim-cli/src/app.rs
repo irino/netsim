@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
+use ir::DeviceConfig;
 use parse_ios::parse_ios_config;
+use parse_junos::parse_junos_config;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -11,7 +13,7 @@ use topology::infer_topology;
 pub enum CliError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unsupported vendor '{0}'. Supported vendors: ios")]
+    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos")]
     UnsupportedVendor(String),
     #[error("No configuration files found in '{0}'")]
     NoConfigsFound(PathBuf),
@@ -74,15 +76,44 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
     }
 }
 
+fn detect_and_parse_config(
+    content: &str,
+    filename: Option<&str>,
+    vendor_hint: Option<&str>,
+) -> Result<DeviceConfig, CliError> {
+    match vendor_hint {
+        Some("ios") => Ok(parse_ios_config(content, filename)),
+        Some("junos") => Ok(parse_junos_config(content, filename)),
+        Some(v) => Err(CliError::UnsupportedVendor(v.to_string())),
+        None => {
+            // Auto-detect: if extension is .set or non-empty lines start with 'set ', assume junos
+            let is_set_format = content
+                .lines()
+                .map(|l| l.trim())
+                .any(|l| l.starts_with("set "));
+
+            let ext = filename
+                .and_then(|f| Path::new(f).extension())
+                .and_then(|s| s.to_str());
+
+            if ext == Some("set") || is_set_format {
+                Ok(parse_junos_config(content, filename))
+            } else {
+                Ok(parse_ios_config(content, filename))
+            }
+        }
+    }
+}
+
 pub fn run_convert(vendor: &str, in_path: &Path, out_path: &Path) -> Result<(), CliError> {
-    if vendor != "ios" {
+    if vendor != "ios" && vendor != "junos" {
         return Err(CliError::UnsupportedVendor(vendor.to_string()));
     }
 
     let content = fs::read_to_string(in_path)?;
     let filename = in_path.file_name().and_then(|s| s.to_str());
 
-    let device = parse_ios_config(&content, filename);
+    let device = detect_and_parse_config(&content, filename, Some(vendor))?;
 
     // Print diagnostics to stderr
     for unparsed in &device.unparsed_lines {
@@ -135,7 +166,7 @@ pub fn run_gen_lab(configs_dir: &Path, out_dir: &Path, lab_name: &str) -> Result
         let path = entry.path();
         if path.is_file() {
             if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                if ext == "cfg" || ext == "conf" || ext == "txt" {
+                if ext == "cfg" || ext == "conf" || ext == "txt" || ext == "set" {
                     config_files.push(path);
                 }
             }
@@ -156,7 +187,7 @@ pub fn run_gen_lab(configs_dir: &Path, out_dir: &Path, lab_name: &str) -> Result
     for cfg_path in &config_files {
         let content = fs::read_to_string(cfg_path)?;
         let filename = cfg_path.file_name().and_then(|s| s.to_str());
-        let dev = parse_ios_config(&content, filename);
+        let dev = detect_and_parse_config(&content, filename, None)?;
         for unparsed in &dev.unparsed_lines {
             all_unparsed.push(unparsed.clone());
         }

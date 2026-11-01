@@ -1,0 +1,9 @@
+set system host-name JUNOS-GOLDEN
+set interfaces ge-0/0/0 description "Primary Interface"
+set interfaces ge-0/0/0 unit 0 family inet address 10.0.1.1/24
+set interfaces ge-0/0/1 description "Secondary Interface"
+set interfaces ge-0/0/1 unit 0 family inet address 192.168.100.1/24
+set interfaces ge-0/0/1 unit 0 disable
+set routing-options router-id 1.1.1.1
+set protocols ospf area 0.0.0.0 interface ge-0/0/0.0
+set unsupported junos command test

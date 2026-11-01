@@ -6,6 +6,7 @@ A Rust-based multi-vendor network configuration translator and network emulation
 
 - `crates/ir`: Vendor-independent Intermediate Representation data models (`DeviceConfig`, `Interface`, `OspfProcess`, `UnparsedLine`, `Ipv4Prefix`, `PrefixLength`, `OspfAreaId`) aligned with IETF YANG models.
 - `crates/parse-ios`: Cisco IOS configuration parser built with `winnow`.
+- `crates/parse-junos`: Junos set-format configuration parser built with `winnow`.
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
@@ -22,7 +23,7 @@ cargo run --bin netsim -- convert --vendor ios --in R1.cfg --out R1.zebra.yaml
 ```
 
 Options:
-- `--vendor <ios>`: Input vendor configuration format (defaults to `ios`).
+- `--vendor <ios|junos>`: Input vendor configuration format (defaults to `ios`).
 - `--in <FILE>`: Path to the input vendor configuration.
 - `--out <FILE>`: Path to the destination zebra-rs YAML configuration.
 
@@ -70,6 +71,31 @@ The initial Cisco IOS parser supports:
   - Process creation: `router ospf <PROCESS_ID>`
   - Router ID: `router-id <A.B.C.D>`
   - Network statements: `network <ADDRESS> <WILDCARD> area <AREA>` (supports integer and dotted-quad area IDs, as well as non-contiguous wildcard mask bitwise matching).
+
+Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## Supported Junos Syntax (`crates/parse-junos`)
+
+The Junos set-format parser supports:
+
+- **Hostname**: `set system host-name <NAME>`
+- **Interfaces**:
+  - `set interfaces <NAME> description <TEXT>`
+  - `set interfaces <NAME> disable`
+  - `set interfaces <NAME> unit <UNIT> description <TEXT>`
+  - `set interfaces <NAME> unit <UNIT> disable`
+  - `set interfaces <NAME> unit <UNIT> family inet address <IP/LEN>`
+- **Routing Options**:
+  - Router ID: `set routing-options router-id <A.B.C.D>`
+  - Autonomous System: `set routing-options autonomous-system <AS>`
+  - Static Routes: `set routing-options static route <DEST/LEN> next-hop <NEXT_HOP>`
+- **OSPF Protocol**:
+  - Interface participation: `set protocols ospf area <AREA> interface <NAME>`
+  - Interface options: `metric <COST>`, `passive`
+- **BGP Protocol**:
+  - Peer configuration: `set protocols bgp group <GROUP> neighbor <A.B.C.D> peer-as <AS>`
+  - Local AS: `set protocols bgp [group <GROUP>] local-as <AS>`
+  - Route export filters: `set policy-options policy-statement ... term ... from route-filter <PREFIX> exact`
 
 Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
 
