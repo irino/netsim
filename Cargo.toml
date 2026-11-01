@@ -7,5 +7,6 @@ members = [
     "crates/emit-zebra",
     "crates/emit-clab",
     "crates/netsim-cli",
+    "crates/validate-yang",
 ]
 resolver = "2"
