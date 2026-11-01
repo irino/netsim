@@ -1,5 +1,8 @@
 use super::*;
-use ir::{DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId, OspfProcess};
+use ir::{
+    BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
+    OspfProcess, StaticRoute,
+};
 use std::net::Ipv4Addr;
 
 fn make_basic_device() -> DeviceConfig {
@@ -77,6 +80,64 @@ fn test_ospf_router_id_and_area() {
     assert!(yaml.contains("cost: 10"));
     assert!(yaml.contains("cost: 20"));
     assert!(yaml.contains("passive: true"));
+}
+
+#[test]
+fn test_static_routes_emission() {
+    let dev = DeviceConfig {
+        hostname: "R-STATIC".to_string(),
+        interfaces: Vec::new(),
+        ospf: None,
+        bgp: None,
+        static_routes: vec![
+            StaticRoute {
+                destination: "0.0.0.0/0".parse().unwrap(),
+                next_hop: Ipv4Addr::new(10, 0, 0, 1),
+            },
+            StaticRoute {
+                destination: "192.168.0.0/16".parse().unwrap(),
+                next_hop: Ipv4Addr::new(10, 0, 0, 2),
+            },
+        ],
+        unparsed_lines: Vec::new(),
+    };
+
+    let yaml = emit_zebra_yaml(&dev).unwrap();
+    assert!(yaml.contains("ip:"));
+    assert!(yaml.contains("route:"));
+    assert!(yaml.contains("destination: 0.0.0.0/0"));
+    assert!(yaml.contains("next-hop: 10.0.0.1"));
+    assert!(yaml.contains("destination: 192.168.0.0/16"));
+    assert!(yaml.contains("next-hop: 10.0.0.2"));
+}
+
+#[test]
+fn test_bgp_emission() {
+    let dev = DeviceConfig {
+        hostname: "R-BGP".to_string(),
+        interfaces: Vec::new(),
+        ospf: None,
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
+            neighbors: vec![BgpNeighbor {
+                remote_address: Ipv4Addr::new(10, 0, 0, 2),
+                remote_as: 65002,
+            }],
+            networks: vec!["192.168.1.0/24".parse().unwrap()],
+        }),
+        static_routes: Vec::new(),
+        unparsed_lines: Vec::new(),
+    };
+
+    let yaml = emit_zebra_yaml(&dev).unwrap();
+    assert!(yaml.contains("router:"));
+    assert!(yaml.contains("bgp:"));
+    assert!(yaml.contains("as: 65001"));
+    assert!(yaml.contains("router-id: 1.1.1.1"));
+    assert!(yaml.contains("peer-address: 10.0.0.2"));
+    assert!(yaml.contains("remote-as: 65002"));
+    assert!(yaml.contains("- 192.168.1.0/24"));
 }
 
 #[test]
