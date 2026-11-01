@@ -2,6 +2,7 @@ use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
 use netsim_cli::{run, Cli, Commands};
 use parse_ios::parse_ios_config;
+use parse_junos::parse_junos_config;
 use std::fs;
 use std::path::{Path, PathBuf};
 use topology::infer_topology;
@@ -122,6 +123,85 @@ fn test_e2e_ospf_3routers_pipeline() {
 
     let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
     assert!(clab_yaml.contains("name: ospf-triangle"));
+
+    let _ = fs::remove_dir_all(&tmp_out);
+}
+
+#[test]
+fn test_e2e_mixed_ios_junos_pipeline() {
+    let example_dir = find_examples_dir("mixed-ios-junos");
+
+    // 1. Test programmatic multi-vendor parsing and inference
+    let cisco_content = fs::read_to_string(example_dir.join("cisco-r1.cfg")).unwrap();
+    let junos_content = fs::read_to_string(example_dir.join("junos-r2.set")).unwrap();
+
+    let r1 = parse_ios_config(&cisco_content, Some("cisco-r1.cfg"));
+    let r2 = parse_junos_config(&junos_content, Some("junos-r2.set"));
+
+    assert_eq!(r1.hostname, "cisco-r1");
+    assert_eq!(r2.hostname, "junos-r2");
+
+    assert_eq!(
+        r1.ospf.as_ref().unwrap().router_id.unwrap().to_string(),
+        "1.1.1.1"
+    );
+    assert_eq!(
+        r2.ospf.as_ref().unwrap().router_id.unwrap().to_string(),
+        "2.2.2.2"
+    );
+
+    let devices = vec![r1, r2];
+
+    // Infer topology across mixed vendor routers
+    let topo = infer_topology(&devices);
+    assert_eq!(
+        topo.links.len(),
+        1,
+        "Expected 1 point-to-point link between cisco-r1 and junos-r2"
+    );
+    assert_eq!(topo.links[0].subnet.to_string(), "10.0.0.0/30");
+    assert!(topo.warnings.is_empty());
+
+    // Check zebra-rs configuration generation for both vendors
+    for dev in &devices {
+        let zebra_res = emit_zebra(dev).unwrap();
+        assert!(zebra_res
+            .yaml
+            .contains(&format!("hostname: {}", dev.hostname)));
+        assert!(zebra_res.yaml.contains("router:"));
+        assert!(zebra_res.yaml.contains("ospf:"));
+    }
+
+    // 2. Test CLI end-to-end `gen-lab` execution with auto-detection
+    let tmp_out = create_temp_dir("mixed_cli");
+    let cli = Cli {
+        command: Commands::GenLab {
+            configs: example_dir,
+            out: tmp_out.clone(),
+            lab_name: "mixed-lab".to_string(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(
+        res.is_ok(),
+        "CLI gen-lab command must succeed for mixed vendor directory"
+    );
+
+    assert!(tmp_out.join("cisco-r1.zebra.yaml").exists());
+    assert!(tmp_out.join("junos-r2.zebra.yaml").exists());
+    assert!(tmp_out.join("topology.clab.yml").exists());
+    assert!(tmp_out.join("report.md").exists());
+
+    let report_content = fs::read_to_string(tmp_out.join("report.md")).unwrap();
+    assert!(report_content.contains("**Lab Name**: `mixed-lab`"));
+    assert!(report_content.contains("**Devices Processed**: 2"));
+    assert!(report_content.contains("10.0.0.0/30"));
+
+    let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
+    assert!(clab_yaml.contains("name: mixed-lab"));
+    assert!(clab_yaml.contains("cisco-r1:eth1"));
+    assert!(clab_yaml.contains("junos-r2:eth1"));
 
     let _ = fs::remove_dir_all(&tmp_out);
 }
