@@ -241,6 +241,25 @@ pub fn run_gen_lab(configs_dir: &Path, out_dir: &Path, lab_name: &str) -> Result
         report.push('\n');
     }
 
+    if !topology.lan_segments.is_empty() {
+        report.push_str("## Inferred Multi-Access LANs (Bridges)\n\n");
+        for (idx, lan) in topology.lan_segments.iter().enumerate() {
+            let bridge_name = format!("br-lan{}", idx);
+            let ep_strs: Vec<String> = lan
+                .endpoints
+                .iter()
+                .map(|ep| format!("`{}:{}`", ep.hostname, ep.interface_name))
+                .collect();
+            report.push_str(&format!(
+                "- Subnet `{}` via bridge `{}`: {}\n",
+                lan.subnet,
+                bridge_name,
+                ep_strs.join(", ")
+            ));
+        }
+        report.push('\n');
+    }
+
     if !topology.warnings.is_empty() {
         report.push_str("## Topology Warnings\n\n");
         for w in &topology.warnings {

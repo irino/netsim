@@ -17,7 +17,8 @@ pub enum EmitClabError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClabNode {
     pub kind: String,
-    pub image: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub binds: Vec<String>,
 }
@@ -102,8 +103,24 @@ pub fn build_clab_topology(
             dev.hostname.clone(),
             ClabNode {
                 kind: "linux".to_string(),
-                image: options.image.clone(),
+                image: Some(options.image.clone()),
                 binds: vec![bind_str],
+            },
+        );
+    }
+
+    // Build bridge nodes for multi-access LAN segments
+    let mut sorted_lan_segments = topology.lan_segments.clone();
+    sorted_lan_segments.sort();
+
+    for lan_idx in 0..sorted_lan_segments.len() {
+        let bridge_name = format!("br-lan{}", lan_idx);
+        nodes.insert(
+            bridge_name,
+            ClabNode {
+                kind: "bridge".to_string(),
+                image: None,
+                binds: Vec::new(),
             },
         );
     }
@@ -148,6 +165,37 @@ pub fn build_clab_topology(
         links.push(ClabLink {
             endpoints: vec![first, second],
         });
+    }
+
+    // Add links between routers and bridge nodes for multi-access LAN segments
+    for (lan_idx, lan) in sorted_lan_segments.iter().enumerate() {
+        let bridge_name = format!("br-lan{}", lan_idx);
+        let mut sorted_endpoints = lan.endpoints.clone();
+        sorted_endpoints.sort();
+
+        for (ep_idx, ep) in sorted_endpoints.iter().enumerate() {
+            let linux_name = mapper
+                .get_linux_name(&ep.hostname, &ep.interface_name)
+                .ok_or_else(|| {
+                    EmitClabError::MissingInterfaceMapping(
+                        ep.hostname.clone(),
+                        ep.interface_name.clone(),
+                    )
+                })?;
+
+            let endpoint_router = format!("{}:{}", ep.hostname, linux_name);
+            let endpoint_bridge = format!("{}:eth{}", bridge_name, ep_idx + 1);
+
+            let (first, second) = if endpoint_router <= endpoint_bridge {
+                (endpoint_router, endpoint_bridge)
+            } else {
+                (endpoint_bridge, endpoint_router)
+            };
+
+            links.push(ClabLink {
+                endpoints: vec![first, second],
+            });
+        }
     }
 
     links.sort();

@@ -128,6 +128,82 @@ fn test_e2e_ospf_3routers_pipeline() {
 }
 
 #[test]
+fn test_e2e_multi_access_lan_pipeline() {
+    let tmp_cfg_dir = create_temp_dir("lan_cfg");
+
+    // Create 3 router configs sharing a single /24 multi-access subnet
+    let r1_cfg = r#"
+hostname r1
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.0
+ no shutdown
+router ospf 1
+ router-id 1.1.1.1
+ network 10.0.0.0 0.0.0.255 area 0
+"#;
+    let r2_cfg = r#"
+hostname r2
+interface GigabitEthernet0/0
+ ip address 10.0.0.2 255.255.255.0
+ no shutdown
+router ospf 1
+ router-id 2.2.2.2
+ network 10.0.0.0 0.0.0.255 area 0
+"#;
+    let r3_cfg = r#"
+hostname r3
+interface GigabitEthernet0/0
+ ip address 10.0.0.3 255.255.255.0
+ no shutdown
+router ospf 1
+ router-id 3.3.3.3
+ network 10.0.0.0 0.0.0.255 area 0
+"#;
+
+    fs::write(tmp_cfg_dir.join("r1.cfg"), r1_cfg).unwrap();
+    fs::write(tmp_cfg_dir.join("r2.cfg"), r2_cfg).unwrap();
+    fs::write(tmp_cfg_dir.join("r3.cfg"), r3_cfg).unwrap();
+
+    let tmp_out = create_temp_dir("lan_out");
+    let cli = Cli {
+        command: Commands::GenLab {
+            configs: tmp_cfg_dir.clone(),
+            out: tmp_out.clone(),
+            lab_name: "lan-test".to_string(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(
+        res.is_ok(),
+        "CLI gen-lab command must succeed for multi-access LAN"
+    );
+
+    assert!(tmp_out.join("r1.zebra.yaml").exists());
+    assert!(tmp_out.join("r2.zebra.yaml").exists());
+    assert!(tmp_out.join("r3.zebra.yaml").exists());
+    assert!(tmp_out.join("topology.clab.yml").exists());
+    assert!(tmp_out.join("report.md").exists());
+
+    let report_content = fs::read_to_string(tmp_out.join("report.md")).unwrap();
+    assert!(report_content.contains("## Inferred Multi-Access LANs (Bridges)"));
+    assert!(report_content.contains("Subnet `10.0.0.0/24` via bridge `br-lan0`"));
+
+    let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
+    assert!(clab_yaml.contains("br-lan0:"));
+    assert!(clab_yaml.contains("kind: bridge"));
+    assert!(
+        !clab_yaml.contains("image: zebra-rs:latest\n      binds:\n      - ./br-lan0.zebra.yaml")
+    );
+    assert!(clab_yaml.contains("br-lan0:eth1"));
+    assert!(clab_yaml.contains("br-lan0:eth2"));
+    assert!(clab_yaml.contains("br-lan0:eth3"));
+
+    let _ = fs::remove_dir_all(&tmp_cfg_dir);
+    let _ = fs::remove_dir_all(&tmp_out);
+}
+
+#[test]
 fn test_e2e_mixed_ios_junos_pipeline() {
     let example_dir = find_examples_dir("mixed-ios-junos");
 

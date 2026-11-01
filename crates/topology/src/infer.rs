@@ -27,11 +27,21 @@ pub struct TopologyWarning {
     pub message: String,
 }
 
-/// Inferred network topology containing point-to-point links and warnings.
+/// A multi-access LAN segment connecting three or more device interfaces via a shared subnet.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LanSegment {
+    pub subnet: Ipv4Prefix,
+    pub endpoints: Vec<LinkEndpoint>,
+}
+
+/// Inferred network topology containing point-to-point links, multi-access LAN segments, and warnings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Topology {
     pub links: Vec<Link>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lan_segments: Vec<LanSegment>,
     pub warnings: Vec<TopologyWarning>,
 }
 
@@ -75,6 +85,7 @@ pub fn infer_topology(devices: &[DeviceConfig]) -> Topology {
     }
 
     let mut links = Vec::new();
+    let mut lan_segments = Vec::new();
     let mut warnings = Vec::new();
 
     for (subnet, mut candidates) in subnets {
@@ -85,69 +96,86 @@ pub fn infer_topology(devices: &[DeviceConfig]) -> Topology {
                 .then_with(|| a.interface_name.cmp(&b.interface_name))
         });
 
-        if candidates.len() == 2 {
-            // Check if from two different devices or same device
-            if candidates[0].hostname != candidates[1].hostname {
-                let (ep_a, ep_b) = if candidates[0].hostname < candidates[1].hostname
-                    || (candidates[0].hostname == candidates[1].hostname
-                        && candidates[0].interface_name <= candidates[1].interface_name)
-                {
-                    (
-                        LinkEndpoint {
-                            hostname: candidates[0].hostname.clone(),
-                            interface_name: candidates[0].interface_name.clone(),
-                        },
-                        LinkEndpoint {
-                            hostname: candidates[1].hostname.clone(),
-                            interface_name: candidates[1].interface_name.clone(),
-                        },
-                    )
-                } else {
-                    (
-                        LinkEndpoint {
-                            hostname: candidates[1].hostname.clone(),
-                            interface_name: candidates[1].interface_name.clone(),
-                        },
-                        LinkEndpoint {
-                            hostname: candidates[0].hostname.clone(),
-                            interface_name: candidates[0].interface_name.clone(),
-                        },
-                    )
-                };
-
-                links.push(Link {
-                    subnet,
-                    endpoint_a: ep_a,
-                    endpoint_b: ep_b,
-                });
-            } else {
-                warnings.push(TopologyWarning {
-                    subnet: subnet.clone(),
-                    message: format!(
-                        "Subnet {} has multiple interfaces on the same device '{}'; skipping automatic link inference",
-                        subnet, candidates[0].hostname
-                    ),
-                });
+        // Check if multiple interfaces belong to the same device
+        let mut device_seen = std::collections::BTreeSet::new();
+        let mut duplicate_device = None;
+        for c in &candidates {
+            if !device_seen.insert(&c.hostname) {
+                duplicate_device = Some(c.hostname.clone());
+                break;
             }
-        } else if candidates.len() >= 3 {
-            // Rule 4: Subnets with 3+ eligible interfaces emit warning and skip automatic link generation
+        }
+
+        if let Some(host) = duplicate_device {
             warnings.push(TopologyWarning {
                 subnet: subnet.clone(),
                 message: format!(
-                    "Subnet {} is shared across {} interfaces; multi-access subnets are skipped in MVP",
-                    subnet,
-                    candidates.len()
+                    "Subnet {} has multiple interfaces on the same device '{}'; skipping automatic link inference",
+                    subnet, host
                 ),
             });
+            continue;
+        }
+
+        if candidates.len() == 2 {
+            let (ep_a, ep_b) = if candidates[0].hostname < candidates[1].hostname
+                || (candidates[0].hostname == candidates[1].hostname
+                    && candidates[0].interface_name <= candidates[1].interface_name)
+            {
+                (
+                    LinkEndpoint {
+                        hostname: candidates[0].hostname.clone(),
+                        interface_name: candidates[0].interface_name.clone(),
+                    },
+                    LinkEndpoint {
+                        hostname: candidates[1].hostname.clone(),
+                        interface_name: candidates[1].interface_name.clone(),
+                    },
+                )
+            } else {
+                (
+                    LinkEndpoint {
+                        hostname: candidates[1].hostname.clone(),
+                        interface_name: candidates[1].interface_name.clone(),
+                    },
+                    LinkEndpoint {
+                        hostname: candidates[0].hostname.clone(),
+                        interface_name: candidates[0].interface_name.clone(),
+                    },
+                )
+            };
+
+            links.push(Link {
+                subnet,
+                endpoint_a: ep_a,
+                endpoint_b: ep_b,
+            });
+        } else if candidates.len() >= 3 {
+            let endpoints: Vec<LinkEndpoint> = candidates
+                .into_iter()
+                .map(|c| LinkEndpoint {
+                    hostname: c.hostname,
+                    interface_name: c.interface_name,
+                })
+                .collect();
+
+            lan_segments.push(LanSegment { subnet, endpoints });
         }
     }
 
-    // Rules 8 & 9: Ensure links and warnings are sorted deterministically and deduplicated
+    // Rules 8 & 9: Ensure links, lan_segments, and warnings are sorted deterministically and deduplicated
     links.sort();
     links.dedup();
+
+    lan_segments.sort();
+    lan_segments.dedup();
 
     warnings.sort();
     warnings.dedup();
 
-    Topology { links, warnings }
+    Topology {
+        links,
+        lan_segments,
+        warnings,
+    }
 }
