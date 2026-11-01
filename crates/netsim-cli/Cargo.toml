@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 ir = { path = "../ir" }
 parse-ios = { path = "../parse-ios" }
+parse-junos = { path = "../parse-junos" }
 topology = { path = "../topology" }
 emit-zebra = { path = "../emit-zebra" }
 emit-clab = { path = "../emit-clab" }

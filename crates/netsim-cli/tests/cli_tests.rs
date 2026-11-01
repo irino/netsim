@@ -48,6 +48,38 @@ unsupported command test
 }
 
 #[test]
+fn test_convert_junos_success() {
+    let tmp = create_temp_dir("convert_junos_ok");
+    let in_file = tmp.join("R_JUNOS.set");
+    let out_file = tmp.join("R_JUNOS.zebra.yaml");
+
+    let cfg_content = r#"
+set system host-name "R_JUNOS"
+set interfaces ge-0/0/0 unit 0 family inet address 10.0.0.1/24
+set protocols ospf area 0.0.0.0 interface ge-0/0/0.0
+"#;
+    fs::write(&in_file, cfg_content).unwrap();
+
+    let cli = Cli {
+        command: Commands::Convert {
+            vendor: "junos".to_string(),
+            r#in: in_file.clone(),
+            out: out_file.clone(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(res.is_ok());
+
+    assert!(out_file.exists());
+    let emitted = fs::read_to_string(&out_file).unwrap();
+    assert!(emitted.contains("hostname: R_JUNOS"));
+    assert!(emitted.contains("- 10.0.0.1/24"));
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_convert_invalid_vendor_or_missing_file() {
     let tmp = create_temp_dir("convert_err");
     let in_file = tmp.join("missing.cfg");
@@ -68,7 +100,7 @@ fn test_convert_invalid_vendor_or_missing_file() {
     fs::write(&dummy, "hostname R1").unwrap();
     let cli_bad_vendor = Cli {
         command: Commands::Convert {
-            vendor: "junos".to_string(),
+            vendor: "eos".to_string(),
             r#in: dummy,
             out: out_file,
         },
