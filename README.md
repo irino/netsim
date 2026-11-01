@@ -220,4 +220,5 @@ zebra-rs binds configuration to existing kernel devices and models protocol part
 - Deterministically maps vendor interfaces (e.g. `GigabitEthernet0/0`) to container Linux interfaces (`eth1`, `eth2`, ...) alphabetically while excluding loopback interfaces.
 - Interconnects inferred point-to-point links using brief endpoint syntax `endpoints: ["nodeA:eth1", "nodeB:eth2"]`.
 - Retains deterministic ordering for nodes and links.
-- Explicitly surfaces topology inference warnings (e.g., multi-access shared subnets with 3+ endpoints).
+- Supports multi-access LAN segments (where 3 or more router interfaces share a subnet) by creating Containerlab `kind: bridge` nodes (`br-lan0`, `br-lan1`, etc.) and connecting all participating routers.
+- Explicitly surfaces topology inference warnings (e.g., multiple interfaces on the same device sharing a subnet).

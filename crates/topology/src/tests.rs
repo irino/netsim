@@ -99,18 +99,146 @@ fn test_loopback_excluded() {
 }
 
 #[test]
-fn test_multi_access_subnet_warning() {
+fn test_three_routers_on_one_shared_subnet() {
     let dev1 = make_device("R1", vec![make_iface("eth0", Some("10.0.0.1/24"), true)]);
     let dev2 = make_device("R2", vec![make_iface("eth0", Some("10.0.0.2/24"), true)]);
     let dev3 = make_device("R3", vec![make_iface("eth0", Some("10.0.0.3/24"), true)]);
 
     let topo = infer_topology(&[dev1, dev2, dev3]);
     assert!(topo.links.is_empty());
+    assert_eq!(topo.lan_segments.len(), 1);
+    assert!(topo.warnings.is_empty());
+
+    let lan = &topo.lan_segments[0];
+    assert_eq!(lan.subnet.to_string(), "10.0.0.0/24");
+    assert_eq!(lan.endpoints.len(), 3);
+    assert_eq!(lan.endpoints[0].hostname, "R1");
+    assert_eq!(lan.endpoints[0].interface_name, "eth0");
+    assert_eq!(lan.endpoints[1].hostname, "R2");
+    assert_eq!(lan.endpoints[1].interface_name, "eth0");
+    assert_eq!(lan.endpoints[2].hostname, "R3");
+    assert_eq!(lan.endpoints[2].interface_name, "eth0");
+}
+
+#[test]
+fn test_four_or_more_routers_on_one_shared_subnet() {
+    let dev1 = make_device("R1", vec![make_iface("eth0", Some("192.168.1.1/24"), true)]);
+    let dev2 = make_device("R2", vec![make_iface("eth0", Some("192.168.1.2/24"), true)]);
+    let dev3 = make_device("R3", vec![make_iface("eth0", Some("192.168.1.3/24"), true)]);
+    let dev4 = make_device("R4", vec![make_iface("eth0", Some("192.168.1.4/24"), true)]);
+    let dev5 = make_device("R5", vec![make_iface("eth0", Some("192.168.1.5/24"), true)]);
+
+    let topo = infer_topology(&[dev1, dev2, dev3, dev4, dev5]);
+    assert!(topo.links.is_empty());
+    assert_eq!(topo.lan_segments.len(), 1);
+    assert!(topo.warnings.is_empty());
+
+    let lan = &topo.lan_segments[0];
+    assert_eq!(lan.subnet.to_string(), "192.168.1.0/24");
+    assert_eq!(lan.endpoints.len(), 5);
+}
+
+#[test]
+fn test_multiple_independent_multi_access_lans() {
+    let dev1 = make_device(
+        "R1",
+        vec![
+            make_iface("eth0", Some("10.1.0.1/24"), true),
+            make_iface("eth1", Some("10.2.0.1/24"), true),
+        ],
+    );
+    let dev2 = make_device(
+        "R2",
+        vec![
+            make_iface("eth0", Some("10.1.0.2/24"), true),
+            make_iface("eth1", Some("10.2.0.2/24"), true),
+        ],
+    );
+    let dev3 = make_device(
+        "R3",
+        vec![
+            make_iface("eth0", Some("10.1.0.3/24"), true),
+            make_iface("eth1", Some("10.2.0.3/24"), true),
+        ],
+    );
+
+    let topo = infer_topology(&[dev3, dev1, dev2]);
+    assert!(topo.links.is_empty());
+    assert_eq!(topo.lan_segments.len(), 2);
+    assert!(topo.warnings.is_empty());
+
+    assert_eq!(topo.lan_segments[0].subnet.to_string(), "10.1.0.0/24");
+    assert_eq!(topo.lan_segments[0].endpoints.len(), 3);
+    assert_eq!(topo.lan_segments[1].subnet.to_string(), "10.2.0.0/24");
+    assert_eq!(topo.lan_segments[1].endpoints.len(), 3);
+}
+
+#[test]
+fn test_router_in_both_p2p_and_multi_access_links() {
+    let dev1 = make_device(
+        "R1",
+        vec![
+            make_iface("eth0", Some("10.0.1.1/24"), true), // p2p with R2
+            make_iface("eth1", Some("10.0.2.1/24"), true), // LAN with R2, R3
+        ],
+    );
+    let dev2 = make_device(
+        "R2",
+        vec![
+            make_iface("eth0", Some("10.0.1.2/24"), true),
+            make_iface("eth1", Some("10.0.2.2/24"), true),
+        ],
+    );
+    let dev3 = make_device("R3", vec![make_iface("eth0", Some("10.0.2.3/24"), true)]);
+
+    let topo = infer_topology(&[dev1, dev2, dev3]);
+    assert_eq!(topo.links.len(), 1);
+    assert_eq!(topo.links[0].subnet.to_string(), "10.0.1.0/24");
+
+    assert_eq!(topo.lan_segments.len(), 1);
+    assert_eq!(topo.lan_segments[0].subnet.to_string(), "10.0.2.0/24");
+    assert_eq!(topo.lan_segments[0].endpoints.len(), 3);
+    assert!(topo.warnings.is_empty());
+}
+
+#[test]
+fn test_multi_access_shutdown_loopback_and_no_ip_excluded() {
+    let dev1 = make_device(
+        "R1",
+        vec![
+            make_iface("eth0", Some("10.0.0.1/24"), true),
+            make_iface("eth1", Some("10.0.0.10/24"), false), // shutdown
+            make_iface("Loopback0", Some("10.0.0.20/24"), true), // loopback
+            make_iface("eth2", None, true),                  // no IP
+        ],
+    );
+    let dev2 = make_device("R2", vec![make_iface("eth0", Some("10.0.0.2/24"), true)]);
+    let dev3 = make_device("R3", vec![make_iface("eth0", Some("10.0.0.3/24"), true)]);
+
+    let topo = infer_topology(&[dev1, dev2, dev3]);
+    assert_eq!(topo.lan_segments.len(), 1);
+    assert_eq!(topo.lan_segments[0].endpoints.len(), 3);
+    assert!(topo.warnings.is_empty());
+}
+
+#[test]
+fn test_multi_access_same_device_duplicate_warning() {
+    let dev1 = make_device(
+        "R1",
+        vec![
+            make_iface("eth0", Some("10.0.0.1/24"), true),
+            make_iface("eth1", Some("10.0.0.2/24"), true),
+        ],
+    );
+    let dev2 = make_device("R2", vec![make_iface("eth0", Some("10.0.0.3/24"), true)]);
+    let dev3 = make_device("R3", vec![make_iface("eth0", Some("10.0.0.4/24"), true)]);
+
+    let topo = infer_topology(&[dev1, dev2, dev3]);
+    assert!(topo.lan_segments.is_empty());
     assert_eq!(topo.warnings.len(), 1);
-    assert_eq!(topo.warnings[0].subnet.to_string(), "10.0.0.0/24");
     assert!(topo.warnings[0]
         .message
-        .contains("shared across 3 interfaces"));
+        .contains("multiple interfaces on the same device 'R1'"));
 }
 
 #[test]
