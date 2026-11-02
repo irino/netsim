@@ -7,13 +7,14 @@ use crate::validator::{validate_device_config, validate_yang_json, ValidationErr
 
 #[test]
 fn test_pinned_modules_metadata_and_revisions() {
-    assert_eq!(PINNED_MODULES.len(), 8);
+    assert_eq!(PINNED_MODULES.len(), 9);
     let module_names: Vec<&str> = PINNED_MODULES.iter().map(|m| m.name).collect();
     assert!(module_names.contains(&"iana-if-type"));
     assert!(module_names.contains(&"iana-routing-types"));
     assert!(module_names.contains(&"ietf-interfaces"));
     assert!(module_names.contains(&"ietf-ip"));
     assert!(module_names.contains(&"ietf-routing"));
+    assert!(module_names.contains(&"ietf-routing-policy"));
     assert!(module_names.contains(&"ietf-ipv4-unicast-routing"));
     assert!(module_names.contains(&"ietf-ospf"));
     assert!(module_names.contains(&"ietf-bgp"));
@@ -343,5 +344,102 @@ fn test_schema_drift_detection_on_unexpected_routing_protocol() {
     assert!(
         res.is_err(),
         "Unknown identity/protocol must fail validation"
+    );
+}
+
+#[test]
+fn test_valid_routing_policy_prefix_sets_validation() {
+    let dev = DeviceConfig {
+        hostname: "R_POLICY".to_string(),
+        interfaces: vec![Interface {
+            name: "GigabitEthernet0/0".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: Some(Ipv4Prefix::new(
+                "10.0.0.1".parse().unwrap(),
+                PrefixLength::new(24).unwrap(),
+            )),
+            ospf: None,
+        }],
+        ospf: None,
+        bgp: None,
+        static_routes: vec![],
+        prefix_lists: vec![
+            ir::PrefixList {
+                name: "FILTER-BGP".to_string(),
+                entries: vec![
+                    ir::PrefixListEntry {
+                        sequence: 10,
+                        action: ir::PolicyAction::Permit,
+                        prefix: "10.0.0.0/8".parse().unwrap(),
+                        range: Some(ir::PrefixRange {
+                            ge: Some(PrefixLength::new(16).unwrap()),
+                            le: Some(PrefixLength::new(24).unwrap()),
+                        }),
+                    },
+                    ir::PrefixListEntry {
+                        sequence: 20,
+                        action: ir::PolicyAction::Deny,
+                        prefix: "0.0.0.0/0".parse().unwrap(),
+                        range: Some(ir::PrefixRange {
+                            ge: None,
+                            le: Some(PrefixLength::new(32).unwrap()),
+                        }),
+                    },
+                ],
+            },
+            ir::PrefixList {
+                name: "PL-SIMPLE".to_string(),
+                entries: vec![ir::PrefixListEntry {
+                    sequence: 5,
+                    action: ir::PolicyAction::Permit,
+                    prefix: "192.168.1.0/24".parse().unwrap(),
+                    range: None,
+                }],
+            },
+        ],
+        unparsed_lines: vec![],
+    };
+
+    let docs = validate_device_config(&dev).expect("validation of prefix sets must succeed");
+    assert!(docs.routing_policy_json.is_some());
+    let rp_str = docs.routing_policy_json.unwrap();
+    assert!(rp_str.contains("FILTER-BGP"));
+    assert!(rp_str.contains("PL-SIMPLE"));
+}
+
+#[test]
+fn test_invalid_routing_policy_mask_length_upper_fails() {
+    let ctx = create_yang_context();
+
+    // mask-length-upper < mask-length-lower must fail RFC 9067 schema validation
+    let bad_policy_json = r#"{
+      "ietf-routing-policy:routing-policy": {
+        "defined-sets": {
+          "prefix-sets": {
+            "prefix-set": [
+              {
+                "name": "BAD-RANGE",
+                "mode": "ipv4",
+                "prefixes": {
+                  "prefix-list": [
+                    {
+                      "ip-prefix": "10.0.0.0/8",
+                      "mask-length-lower": 24,
+                      "mask-length-upper": 16
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }"#;
+
+    let res = validate_yang_json(&ctx, bad_policy_json, "ietf-routing-policy");
+    assert!(
+        res.is_err(),
+        "mask-length-upper < mask-length-lower must fail validation"
     );
 }

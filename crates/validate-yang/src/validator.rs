@@ -77,5 +77,10 @@ pub fn validate_device_config(
         validate_yang_json(&ctx_lock, if_json, "ietf-interfaces / ietf-ip")?;
     }
 
+    // 3. Validate standalone routing policy if present
+    if let Some(ref rp_json) = docs.routing_policy_json {
+        validate_yang_json(&ctx_lock, rp_json, "ietf-routing-policy")?;
+    }
+
     Ok(docs)
 }
