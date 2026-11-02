@@ -147,3 +147,40 @@ set routing-options static route invalid
         .reason
         .contains("malformed static route"));
 }
+
+#[test]
+fn test_parse_junos_prefix_lists() {
+    let cfg = r#"
+set system host-name R_JUNOS_PL
+set policy-options prefix-list PL-INTERNAL 10.0.0.0/8
+set policy-options prefix-list PL-INTERNAL 172.16.0.0/12
+set policy-options prefix-list PL-DEFAULT 0.0.0.0/0
+"#;
+
+    let dev = parse_junos_config(cfg, Some("pl.set"));
+    assert_eq!(dev.hostname, "R_JUNOS_PL");
+    assert_eq!(dev.prefix_lists.len(), 2);
+
+    let pl_default = dev
+        .prefix_lists
+        .iter()
+        .find(|p| p.name == "PL-DEFAULT")
+        .unwrap();
+    assert_eq!(pl_default.entries.len(), 1);
+    assert_eq!(pl_default.entries[0].sequence, 5);
+    assert_eq!(pl_default.entries[0].prefix.to_string(), "0.0.0.0/0");
+    assert_eq!(pl_default.entries[0].action, ir::PolicyAction::Permit);
+
+    let pl_internal = dev
+        .prefix_lists
+        .iter()
+        .find(|p| p.name == "PL-INTERNAL")
+        .unwrap();
+    assert_eq!(pl_internal.entries.len(), 2);
+    assert_eq!(pl_internal.entries[0].sequence, 5);
+    assert_eq!(pl_internal.entries[0].prefix.to_string(), "10.0.0.0/8");
+    assert_eq!(pl_internal.entries[1].sequence, 10);
+    assert_eq!(pl_internal.entries[1].prefix.to_string(), "172.16.0.0/12");
+
+    assert!(dev.unparsed_lines.is_empty());
+}
