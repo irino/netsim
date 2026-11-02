@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
 use ir::DeviceConfig;
+use parse_eos::parse_eos_config;
 use parse_ios::parse_ios_config;
 use parse_junos::parse_junos_config;
 use std::fs;
@@ -13,7 +14,7 @@ use topology::infer_topology;
 pub enum CliError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos")]
+    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos, eos")]
     UnsupportedVendor(String),
     #[error("No configuration files found in '{0}'")]
     NoConfigsFound(PathBuf),
@@ -81,12 +82,15 @@ fn detect_and_parse_config(
     filename: Option<&str>,
     vendor_hint: Option<&str>,
 ) -> Result<DeviceConfig, CliError> {
-    match vendor_hint {
-        Some("ios") => Ok(parse_ios_config(content, filename)),
-        Some("junos") => Ok(parse_junos_config(content, filename)),
+    let vendor_norm = vendor_hint.map(|v| v.to_ascii_lowercase());
+    match vendor_norm.as_deref() {
+        Some("ios") | Some("cisco") => Ok(parse_ios_config(content, filename)),
+        Some("junos") | Some("juniper") => Ok(parse_junos_config(content, filename)),
+        Some("eos") | Some("arista") => Ok(parse_eos_config(content, filename)),
         Some(v) => Err(CliError::UnsupportedVendor(v.to_string())),
         None => {
-            // Auto-detect: if extension is .set or non-empty lines start with 'set ', assume junos
+            // Auto-detect:
+            // 1. If extension is .set or non-empty lines start with 'set ', assume junos
             let is_set_format = content
                 .lines()
                 .map(|l| l.trim())
@@ -97,7 +101,24 @@ fn detect_and_parse_config(
                 .and_then(|s| s.to_str());
 
             if ext == Some("set") || is_set_format {
-                Ok(parse_junos_config(content, filename))
+                return Ok(parse_junos_config(content, filename));
+            }
+
+            // 2. If content contains Arista EOS signatures or file starts with eos/arista
+            let is_eos = content.lines().any(|l| {
+                let t = l.trim();
+                t.contains("EOS-")
+                    || t.contains("vEOS")
+                    || t.starts_with("transceiver qsfp")
+                    || t.starts_with("spanning-tree mode")
+                    || t.starts_with("management api")
+                    || t.starts_with("service routing protocols model")
+            }) || filename
+                .map(|f| f.to_lowercase().contains("eos") || f.to_lowercase().contains("arista"))
+                .unwrap_or(false);
+
+            if is_eos {
+                Ok(parse_eos_config(content, filename))
             } else {
                 Ok(parse_ios_config(content, filename))
             }
@@ -106,7 +127,14 @@ fn detect_and_parse_config(
 }
 
 pub fn run_convert(vendor: &str, in_path: &Path, out_path: &Path) -> Result<(), CliError> {
-    if vendor != "ios" && vendor != "junos" {
+    let vendor_lower = vendor.to_ascii_lowercase();
+    if vendor_lower != "ios"
+        && vendor_lower != "cisco"
+        && vendor_lower != "junos"
+        && vendor_lower != "juniper"
+        && vendor_lower != "eos"
+        && vendor_lower != "arista"
+    {
         return Err(CliError::UnsupportedVendor(vendor.to_string()));
     }
 

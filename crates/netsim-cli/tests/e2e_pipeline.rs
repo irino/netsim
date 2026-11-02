@@ -1,6 +1,7 @@
 use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
 use netsim_cli::{run, Cli, Commands};
+use parse_eos::parse_eos_config;
 use parse_ios::parse_ios_config;
 use parse_junos::parse_junos_config;
 use std::fs;
@@ -123,6 +124,100 @@ fn test_e2e_ospf_3routers_pipeline() {
 
     let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
     assert!(clab_yaml.contains("name: ospf-triangle"));
+
+    let _ = fs::remove_dir_all(&tmp_out);
+}
+
+#[test]
+fn test_e2e_mixed_3vendors_pipeline() {
+    let example_dir = find_examples_dir("mixed-3vendors");
+
+    // 1. Programmatic multi-vendor parsing and inference across 3 different vendors
+    let cisco_content = fs::read_to_string(example_dir.join("cisco-r1.cfg")).unwrap();
+    let junos_content = fs::read_to_string(example_dir.join("junos-r2.set")).unwrap();
+    let arista_content = fs::read_to_string(example_dir.join("arista-r3.cfg")).unwrap();
+
+    let r1 = parse_ios_config(&cisco_content, Some("cisco-r1.cfg"));
+    let r2 = parse_junos_config(&junos_content, Some("junos-r2.set"));
+    let r3 = parse_eos_config(&arista_content, Some("arista-r3.cfg"));
+
+    assert_eq!(r1.hostname, "cisco-r1");
+    assert_eq!(r2.hostname, "junos-r2");
+    assert_eq!(r3.hostname, "arista-r3");
+
+    assert_eq!(
+        r1.ospf.as_ref().unwrap().router_id.unwrap().to_string(),
+        "1.1.1.1"
+    );
+    assert_eq!(
+        r2.ospf.as_ref().unwrap().router_id.unwrap().to_string(),
+        "2.2.2.2"
+    );
+    assert_eq!(
+        r3.ospf.as_ref().unwrap().router_id.unwrap().to_string(),
+        "3.3.3.3"
+    );
+
+    let devices = vec![r1, r2, r3];
+
+    // Infer topology across all 3 vendors
+    let topo = infer_topology(&devices);
+    assert_eq!(
+        topo.links.len(),
+        3,
+        "Expected 3 point-to-point links between the 3 vendor routers"
+    );
+    assert!(topo.warnings.is_empty());
+
+    let subnets: Vec<String> = topo.links.iter().map(|l| l.subnet.to_string()).collect();
+    assert!(subnets.contains(&"10.0.12.0/30".to_string()));
+    assert!(subnets.contains(&"10.0.13.0/30".to_string()));
+    assert!(subnets.contains(&"10.0.23.0/30".to_string()));
+
+    // Verify zebra-rs configuration generation for all 3 vendors
+    for dev in &devices {
+        let zebra_res = emit_zebra(dev).unwrap();
+        assert!(zebra_res
+            .yaml
+            .contains(&format!("hostname: {}", dev.hostname)));
+        assert!(zebra_res.yaml.contains("router:"));
+        assert!(zebra_res.yaml.contains("ospf:"));
+    }
+
+    // 2. Test CLI end-to-end `gen-lab` execution with auto-detection for 3 vendors
+    let tmp_out = create_temp_dir("mixed3_cli");
+    let cli = Cli {
+        command: Commands::GenLab {
+            configs: example_dir,
+            out: tmp_out.clone(),
+            lab_name: "triangle-3vendor".to_string(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(
+        res.is_ok(),
+        "CLI gen-lab command must succeed for mixed 3-vendor directory"
+    );
+
+    assert!(tmp_out.join("cisco-r1.zebra.yaml").exists());
+    assert!(tmp_out.join("junos-r2.zebra.yaml").exists());
+    assert!(tmp_out.join("arista-r3.zebra.yaml").exists());
+    assert!(tmp_out.join("topology.clab.yml").exists());
+    assert!(tmp_out.join("report.md").exists());
+
+    let report_content = fs::read_to_string(tmp_out.join("report.md")).unwrap();
+    assert!(report_content.contains("**Lab Name**: `triangle-3vendor`"));
+    assert!(report_content.contains("**Devices Processed**: 3"));
+    assert!(report_content.contains("10.0.12.0/30"));
+    assert!(report_content.contains("10.0.13.0/30"));
+    assert!(report_content.contains("10.0.23.0/30"));
+
+    let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
+    assert!(clab_yaml.contains("name: triangle-3vendor"));
+    assert!(clab_yaml.contains("cisco-r1:eth1"));
+    assert!(clab_yaml.contains("junos-r2:eth1"));
+    assert!(clab_yaml.contains("arista-r3:eth1"));
 
     let _ = fs::remove_dir_all(&tmp_out);
 }
