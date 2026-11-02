@@ -265,3 +265,27 @@ fn test_multiple_independent_bridge_nodes() {
     // 3 endpoints per bridge * 2 bridges = 6 links
     assert_eq!(links.len(), 6);
 }
+
+#[test]
+fn test_clab_emission_with_device_having_prefix_lists() {
+    let mut r1 = make_device("r1", &[("GigabitEthernet0/0", Some("10.0.0.1/24"), true)]);
+    let r2 = make_device("r2", &[("GigabitEthernet0/0", Some("10.0.0.2/24"), true)]);
+
+    r1.prefix_lists = vec![ir::PrefixList {
+        name: "PL-OUT".to_string(),
+        entries: vec![ir::PrefixListEntry {
+            sequence: 10,
+            action: ir::PolicyAction::Permit,
+            prefix: "192.168.0.0/16".parse().unwrap(),
+            range: None,
+        }],
+    }];
+
+    let topo = infer_topology(&[r1.clone(), r2.clone()]);
+    let clab = emit_clab_topology("lab-with-policies", &[r1, r2], &topo, None).unwrap();
+
+    assert!(clab.yaml.contains("name: lab-with-policies"));
+    assert!(clab.yaml.contains("r1:"));
+    assert!(clab.yaml.contains("r2:"));
+    assert!(clab.warnings.is_empty());
+}

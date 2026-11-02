@@ -229,6 +229,17 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         }
     }
 
+    // Report prefix-list configuration status
+    if !device.prefix_lists.is_empty() {
+        warnings.push(EmitWarning {
+            category: "prefix-list".to_string(),
+            message: format!(
+                "Routing policy prefix-lists ({} defined) emission to zebra-rs runtime configuration is pending routing-policy schema integration and will be omitted",
+                device.prefix_lists.len()
+            ),
+        });
+    }
+
     // Report unparsed lines preserved from parser
     for unparsed in &device.unparsed_lines {
         warnings.push(EmitWarning {

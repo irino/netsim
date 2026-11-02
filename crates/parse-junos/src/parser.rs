@@ -1,6 +1,6 @@
 use ir::{
     BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
-    OspfProcess, StaticRoute, UnparsedLine,
+    OspfProcess, PolicyAction, PrefixList, PrefixListEntry, StaticRoute, UnparsedLine,
 };
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
@@ -89,6 +89,8 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut has_bgp = false;
 
     let mut static_routes = Vec::new();
+    let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
+    let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
     let mut unparsed_lines = Vec::new();
 
     for (idx, raw_line) in input.lines().enumerate() {
@@ -489,29 +491,72 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             continue;
         }
 
-        // 6. Policy options for BGP network announcement (e.g. set policy-options policy-statement ... term ... from route-filter <ip/prefix> exact)
+        // 6. Policy options for prefix-list and BGP network announcement:
+        // set policy-options prefix-list <name> <prefix>
+        // set policy-options policy-statement ... term ... from route-filter <ip/prefix> exact
         if let Some(stripped) = cmd.strip_prefix("policy-options ") {
             let rest_po = stripped.trim();
-            let tokens: Vec<&str> = rest_po.split_whitespace().collect();
-            // Look for route-filter <prefix>
-            let mut matched = false;
-            for (t_idx, token) in tokens.iter().enumerate() {
-                if *token == "route-filter" && t_idx + 1 < tokens.len() {
-                    let mut s = tokens[t_idx + 1];
-                    if let Ok(prefix) = parse_ipv4_prefix.parse_next(&mut s) {
-                        bgp_networks.push(prefix);
-                        matched = true;
-                        break;
+            if let Some(stripped_pl) = rest_po.strip_prefix("prefix-list ") {
+                let pl_tokens: Vec<&str> = stripped_pl.split_whitespace().collect();
+                if pl_tokens.len() >= 2 {
+                    let pl_name = pl_tokens[0].to_string();
+                    let mut s = pl_tokens[1];
+                    match parse_ipv4_prefix.parse_next(&mut s) {
+                        Ok(prefix) => {
+                            let next_seq = match prefix_list_last_seq.get(&pl_name) {
+                                Some(&last) => last + 5,
+                                None => 5,
+                            };
+                            prefix_list_last_seq.insert(pl_name.clone(), next_seq);
+                            prefix_lists_map
+                                .entry(pl_name)
+                                .or_default()
+                                .push(PrefixListEntry {
+                                    sequence: next_seq,
+                                    action: PolicyAction::Permit,
+                                    prefix,
+                                    range: None,
+                                });
+                        }
+                        Err(_) => {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "invalid prefix-list IPv4 prefix".to_string(),
+                            });
+                        }
+                    }
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "malformed prefix-list statement".to_string(),
+                    });
+                }
+            } else {
+                let tokens: Vec<&str> = rest_po.split_whitespace().collect();
+                // Look for route-filter <prefix>
+                let mut matched = false;
+                for (t_idx, token) in tokens.iter().enumerate() {
+                    if *token == "route-filter" && t_idx + 1 < tokens.len() {
+                        let mut s = tokens[t_idx + 1];
+                        if let Ok(prefix) = parse_ipv4_prefix.parse_next(&mut s) {
+                            bgp_networks.push(prefix);
+                            matched = true;
+                            break;
+                        }
                     }
                 }
-            }
-            if !matched {
-                unparsed_lines.push(UnparsedLine {
-                    file_path: filename.map(String::from),
-                    line_number: line_num,
-                    content: line.to_string(),
-                    reason: "unsupported policy-options command".to_string(),
-                });
+                if !matched {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "unsupported policy-options command".to_string(),
+                    });
+                }
             }
             continue;
         }
@@ -638,13 +683,20 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         None
     };
 
+    // Finalize prefix lists
+    let mut prefix_lists = Vec::new();
+    for (name, mut entries) in prefix_lists_map {
+        entries.sort_by_key(|e| e.sequence);
+        prefix_lists.push(PrefixList { name, entries });
+    }
+
     DeviceConfig {
         hostname,
         interfaces,
         ospf,
         bgp,
         static_routes,
-        prefix_lists: Vec::new(),
+        prefix_lists,
         unparsed_lines,
     }
 }

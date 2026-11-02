@@ -202,3 +202,31 @@ fn test_emit_warnings_for_unsupported_features() {
     assert!(categories.contains(&"ospf-process-id"));
     assert!(categories.contains(&"unparsed-line"));
 }
+
+#[test]
+fn test_prefix_lists_warning_emission() {
+    let dev = DeviceConfig {
+        hostname: "R_POLICY".to_string(),
+        interfaces: Vec::new(),
+        ospf: None,
+        bgp: None,
+        static_routes: Vec::new(),
+        prefix_lists: vec![ir::PrefixList {
+            name: "TEST_PL".to_string(),
+            entries: vec![ir::PrefixListEntry {
+                sequence: 10,
+                action: ir::PolicyAction::Permit,
+                prefix: "10.0.0.0/8".parse().unwrap(),
+                range: None,
+            }],
+        }],
+        unparsed_lines: Vec::new(),
+    };
+
+    let result = emit_zebra(&dev).unwrap();
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].category, "prefix-list");
+    assert!(result.warnings[0]
+        .message
+        .contains("pending routing-policy schema integration"));
+}
