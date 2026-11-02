@@ -135,7 +135,7 @@ IOS/JUNOS コンフィグで winnow を推す理由:
 ### 対象外（将来）
 - prefix-list / route-map / policy-statement の変換（意味論変換が必要で最難関）
 - ACL、NAT、MPLS / SR、EVPN、認証まわり
-- Cisco IOS XR、FRRouting/SONiC 等の更なる追加ベンダー（Arista EOS は `crates/parse-eos` として実装済み）
+- FRRouting/SONiC 等の更なる追加ベンダー（Arista EOS は `crates/parse-eos`、Cisco IOS XR は `crates/parse-iosxr` として実装済み）
 
 ## 7. Cargo ワークスペース構成案
 
@@ -144,6 +144,7 @@ netsim/
 ├─ crates/
 │  ├─ ir/           # ベンダー非依存モデル（serde、他クレートに依存しない）
 │  ├─ parse-ios/    # IOS → IR（winnow）
+│  ├─ parse-iosxr/  # Cisco IOS XR → IR（winnow）
 │  ├─ parse-junos/  # JUNOS(set形式) → IR（Phase 3）
 │  ├─ parse-eos/    # Arista EOS → IR（winnow）
 │  ├─ topology/     # IR群 → リンク推論

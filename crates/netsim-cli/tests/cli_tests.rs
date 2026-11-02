@@ -119,6 +119,48 @@ router ospf 1
 }
 
 #[test]
+fn test_convert_iosxr_success() {
+    let tmp = create_temp_dir("convert_xr_ok");
+    let in_file = tmp.join("xr1.cfg");
+    let out_file = tmp.join("xr1.zebra.yaml");
+
+    let cfg_content = r#"!RANCID-CONTENT-TYPE: cisco-xr
+hostname xr1
+!
+interface GigabitEthernet0/0/0/0
+ ipv4 address 10.0.0.1/24
+ no shutdown
+!
+router ospf 1
+ router-id 10.255.0.1
+ area 0
+  interface GigabitEthernet0/0/0/0
+  !
+ !
+!
+"#;
+    fs::write(&in_file, cfg_content).unwrap();
+
+    let cli = Cli {
+        command: Commands::Convert {
+            vendor: "iosxr".to_string(),
+            r#in: in_file.clone(),
+            out: out_file.clone(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(res.is_ok());
+
+    assert!(out_file.exists());
+    let emitted = fs::read_to_string(&out_file).unwrap();
+    assert!(emitted.contains("hostname: xr1"));
+    assert!(emitted.contains("- 10.0.0.1/24"));
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_convert_invalid_vendor_or_missing_file() {
     let tmp = create_temp_dir("convert_err");
     let in_file = tmp.join("missing.cfg");

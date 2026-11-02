@@ -286,6 +286,7 @@ dependencies = [
  "ir",
  "parse-eos",
  "parse-ios",
+ "parse-iosxr",
  "parse-junos",
  "thiserror",
  "topology",
@@ -336,6 +337,17 @@ dependencies = [
 
 [[package]]
 name = "parse-ios"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "winnow",
+]
+
+[[package]]
+name = "parse-iosxr"
 version = "0.1.0"
 dependencies = [
  "ir",

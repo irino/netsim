@@ -8,6 +8,7 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/parse-ios`: Cisco IOS configuration parser built with `winnow`.
 - `crates/parse-junos`: Junos set-format configuration parser built with `winnow`.
 - `crates/parse-eos`: Arista EOS configuration parser built with `winnow`.
+- `crates/parse-iosxr`: Cisco IOS XR configuration parser built with `winnow`.
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
@@ -54,8 +55,16 @@ cargo run --bin netsim -- convert \
   --out arista-r3.zebra.yaml
 ```
 
+#### Cisco IOS XR Example:
+```bash
+cargo run --bin netsim -- convert \
+  --vendor iosxr \
+  --in examples/mixed-4vendors/iosxr-r4.cfg \
+  --out iosxr-r4.zebra.yaml
+```
+
 **Options**:
-- `--vendor <ios|junos|eos>`: Input vendor configuration format (`ios`, `junos`, or `eos`; default: `ios`).
+- `--vendor <ios|junos|eos|iosxr>`: Input vendor configuration format (`ios`, `junos`, `eos`, or `iosxr`; default: `ios`).
 - `--in <FILE>`: Path to the input vendor configuration file.
 - `--out <FILE>`: Destination path for the generated zebra-rs YAML configuration.
 
@@ -238,6 +247,33 @@ The Arista EOS parser supports:
   - Network: `network <PREFIX/LEN>` and `network <ADDRESS> mask <NETMASK>`
 - **Prefix Lists**:
   - `ip prefix-list <NAME> [seq <SEQ>] {permit|deny} <PREFIX/LEN> [ge <GE>] [le <LE>]`
+
+Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## Supported Cisco IOS XR Syntax (`crates/parse-iosxr`)
+
+The Cisco IOS XR parser supports:
+
+- **Hostname**: `hostname <NAME>`
+- **Interfaces**:
+  - `interface <NAME>` (e.g., `interface GigabitEthernet0/0/0/0`, `interface Loopback0`)
+  - Description: `description <TEXT>`
+  - IPv4 address in CIDR or netmask format: `ipv4 address <A.B.C.D/LEN>` or `ipv4 address <A.B.C.D> <NETMASK>`
+  - Admin state: `shutdown`, `no shutdown`
+- **Static Routes**:
+  - `router static` with `address-family ipv4 unicast` destinations and next-hops: `<DEST/LEN> <NEXT_HOP>`
+- **OSPF Protocol**:
+  - `router ospf <PROCESS_ID>`
+  - Router ID: `router-id <A.B.C.D>`
+  - Hierarchical areas: `area <AREA>`
+  - Nested interfaces within area: `interface <NAME>` (`cost <COST>`, `passive enable`)
+- **BGP Protocol**:
+  - `router bgp <AS>`
+  - Router ID: `bgp router-id <A.B.C.D>`
+  - Peer configuration: `neighbor <A.B.C.D>` (`remote-as <AS>`)
+  - Network advertisements: `address-family ipv4 unicast` (`network <PREFIX/LEN>`)
+- **Prefix Sets**:
+  - `prefix-set <NAME>` with prefix entries (`<PREFIX/LEN> [ge <GE>] [le <LE>]`) terminated by `end-set`
 
 Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
 

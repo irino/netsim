@@ -4,6 +4,7 @@ use emit_zebra::emit_zebra;
 use ir::DeviceConfig;
 use parse_eos::parse_eos_config;
 use parse_ios::parse_ios_config;
+use parse_iosxr::parse_iosxr_config;
 use parse_junos::parse_junos_config;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use topology::infer_topology;
 pub enum CliError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos, eos")]
+    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos, eos, iosxr")]
     UnsupportedVendor(String),
     #[error("No configuration files found in '{0}'")]
     NoConfigsFound(PathBuf),
@@ -87,6 +88,7 @@ fn detect_and_parse_config(
         Some("ios") | Some("cisco") => Ok(parse_ios_config(content, filename)),
         Some("junos") | Some("juniper") => Ok(parse_junos_config(content, filename)),
         Some("eos") | Some("arista") => Ok(parse_eos_config(content, filename)),
+        Some("iosxr") | Some("ios-xr") | Some("xr") => Ok(parse_iosxr_config(content, filename)),
         Some(v) => Err(CliError::UnsupportedVendor(v.to_string())),
         None => {
             // Auto-detect:
@@ -104,7 +106,33 @@ fn detect_and_parse_config(
                 return Ok(parse_junos_config(content, filename));
             }
 
-            // 2. If content contains Arista EOS signatures or file starts with eos/arista
+            // 2. Check filename hints first
+            if let Some(f) = filename {
+                let f_low = f.to_lowercase();
+                if f_low.contains("xr") || f_low.contains("iosxr") {
+                    return Ok(parse_iosxr_config(content, filename));
+                }
+                if f_low.contains("eos") || f_low.contains("arista") {
+                    return Ok(parse_eos_config(content, filename));
+                }
+            }
+
+            // 3. If content contains Cisco IOS XR signatures
+            let is_iosxr = content.lines().any(|l| {
+                let t = l.trim();
+                t.contains("cisco-xr")
+                    || t.contains("IOS XR")
+                    || t.starts_with("router static")
+                    || t.starts_with("prefix-set ")
+                    || t == "end-set"
+                    || t.starts_with("ipv4 address ")
+            });
+
+            if is_iosxr {
+                return Ok(parse_iosxr_config(content, filename));
+            }
+
+            // 4. If content contains Arista EOS signatures
             let is_eos = content.lines().any(|l| {
                 let t = l.trim();
                 t.contains("EOS-")
@@ -113,9 +141,7 @@ fn detect_and_parse_config(
                     || t.starts_with("spanning-tree mode")
                     || t.starts_with("management api")
                     || t.starts_with("service routing protocols model")
-            }) || filename
-                .map(|f| f.to_lowercase().contains("eos") || f.to_lowercase().contains("arista"))
-                .unwrap_or(false);
+            });
 
             if is_eos {
                 Ok(parse_eos_config(content, filename))
@@ -134,6 +160,9 @@ pub fn run_convert(vendor: &str, in_path: &Path, out_path: &Path) -> Result<(), 
         && vendor_lower != "juniper"
         && vendor_lower != "eos"
         && vendor_lower != "arista"
+        && vendor_lower != "iosxr"
+        && vendor_lower != "ios-xr"
+        && vendor_lower != "xr"
     {
         return Err(CliError::UnsupportedVendor(vendor.to_string()));
     }

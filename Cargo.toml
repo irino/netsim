@@ -4,6 +4,7 @@ members = [
     "crates/parse-ios",
     "crates/parse-junos",
     "crates/parse-eos",
+    "crates/parse-iosxr",
     "crates/topology",
     "crates/emit-zebra",
     "crates/emit-clab",
