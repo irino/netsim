@@ -16,6 +16,7 @@ fn test_clab_golden() {
         ospf: None,
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -31,6 +32,7 @@ fn test_clab_golden() {
         ospf: None,
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 

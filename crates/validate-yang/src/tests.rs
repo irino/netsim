@@ -113,6 +113,7 @@ fn test_valid_device_with_bgp_and_static_routes() {
             destination: Ipv4Prefix::new("0.0.0.0".parse().unwrap(), PrefixLength::new(0).unwrap()),
             next_hop: "203.0.113.2".parse().unwrap(),
         }],
+        prefix_lists: vec![],
         unparsed_lines: vec![],
     };
 

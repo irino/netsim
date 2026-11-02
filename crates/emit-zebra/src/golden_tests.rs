@@ -31,6 +31,7 @@ fn test_zebra_golden() {
         }),
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 

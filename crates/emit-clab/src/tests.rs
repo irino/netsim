@@ -18,6 +18,7 @@ fn make_device(name: &str, ifaces: &[(&str, Option<&str>, bool)]) -> DeviceConfi
         ospf: None,
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }
 }

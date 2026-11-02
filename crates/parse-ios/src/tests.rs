@@ -286,3 +286,168 @@ ip route 192.168.0.0 255.255.0.0 10.0.0.2
     );
     assert_eq!(json_val["static-routes"][0]["next-hop"], "10.0.0.2");
 }
+
+#[test]
+fn test_prefix_list_explicit_and_implicit_sequences() {
+    let cfg = r#"
+hostname R_PL
+ip prefix-list FILTER-BGP description Filter incoming BGP routes
+ip prefix-list FILTER-BGP seq 10 permit 10.0.0.0/8 ge 16 le 24
+ip prefix-list FILTER-BGP seq 20 deny 0.0.0.0/0 le 32
+ip prefix-list AUTO-SEQ permit 172.16.0.0/12
+ip prefix-list AUTO-SEQ deny 192.168.0.0/16 ge 24
+"#;
+
+    let device = parse_ios_config(cfg, Some("pl.cfg"));
+    assert_eq!(device.prefix_lists.len(), 2);
+
+    let pl_auto = device
+        .prefix_lists
+        .iter()
+        .find(|pl| pl.name == "AUTO-SEQ")
+        .unwrap();
+    assert_eq!(pl_auto.entries.len(), 2);
+    assert_eq!(pl_auto.entries[0].sequence, 5);
+    assert_eq!(pl_auto.entries[0].action, ir::PolicyAction::Permit);
+    assert_eq!(pl_auto.entries[0].prefix.to_string(), "172.16.0.0/12");
+    assert!(pl_auto.entries[0].range.is_none());
+
+    assert_eq!(pl_auto.entries[1].sequence, 10);
+    assert_eq!(pl_auto.entries[1].action, ir::PolicyAction::Deny);
+    assert_eq!(pl_auto.entries[1].prefix.to_string(), "192.168.0.0/16");
+    assert_eq!(
+        pl_auto.entries[1].range,
+        Some(ir::PrefixRange {
+            ge: Some(ir::PrefixLength::new(24).unwrap()),
+            le: None,
+        })
+    );
+
+    let pl_filter = device
+        .prefix_lists
+        .iter()
+        .find(|pl| pl.name == "FILTER-BGP")
+        .unwrap();
+    assert_eq!(pl_filter.entries.len(), 2);
+    assert_eq!(pl_filter.entries[0].sequence, 10);
+    assert_eq!(pl_filter.entries[0].action, ir::PolicyAction::Permit);
+    assert_eq!(pl_filter.entries[0].prefix.to_string(), "10.0.0.0/8");
+    assert_eq!(
+        pl_filter.entries[0].range,
+        Some(ir::PrefixRange {
+            ge: Some(ir::PrefixLength::new(16).unwrap()),
+            le: Some(ir::PrefixLength::new(24).unwrap()),
+        })
+    );
+
+    assert_eq!(pl_filter.entries[1].sequence, 20);
+    assert_eq!(pl_filter.entries[1].action, ir::PolicyAction::Deny);
+    assert_eq!(pl_filter.entries[1].prefix.to_string(), "0.0.0.0/0");
+    assert_eq!(
+        pl_filter.entries[1].range,
+        Some(ir::PrefixRange {
+            ge: None,
+            le: Some(ir::PrefixLength::new(32).unwrap()),
+        })
+    );
+
+    assert!(device.unparsed_lines.is_empty());
+}
+
+#[test]
+fn test_prefix_list_diagnostics_and_errors() {
+    let cfg = r#"
+hostname R_ERR
+ip prefix-list DUP seq 10 permit 10.0.0.0/8
+ip prefix-list DUP seq 10 deny 10.1.0.0/16
+ip prefix-list BAD-RANGE permit 10.0.0.0/16 ge 12
+ip prefix-list BAD-RANGE-2 permit 10.0.0.0/16 ge 28 le 24
+ipv6 prefix-list IPV6-PL seq 10 permit 2001:db8::/32
+"#;
+
+    let device = parse_ios_config(cfg, Some("errors.cfg"));
+    assert_eq!(device.unparsed_lines.len(), 4);
+
+    // Duplicate sequence
+    assert_eq!(device.unparsed_lines[0].line_number, 4);
+    assert_eq!(
+        device.unparsed_lines[0].content,
+        "ip prefix-list DUP seq 10 deny 10.1.0.0/16"
+    );
+    assert_eq!(
+        device.unparsed_lines[0].reason,
+        "duplicate sequence number 10 in prefix-list DUP"
+    );
+
+    // Malformed range: ge < prefix_len
+    assert_eq!(device.unparsed_lines[1].line_number, 5);
+    assert_eq!(
+        device.unparsed_lines[1].content,
+        "ip prefix-list BAD-RANGE permit 10.0.0.0/16 ge 12"
+    );
+    assert_eq!(
+        device.unparsed_lines[1].reason,
+        "invalid prefix-list length range: len <= ge <= le"
+    );
+
+    // Malformed range: ge > le
+    assert_eq!(device.unparsed_lines[2].line_number, 6);
+    assert_eq!(
+        device.unparsed_lines[2].content,
+        "ip prefix-list BAD-RANGE-2 permit 10.0.0.0/16 ge 28 le 24"
+    );
+    assert_eq!(
+        device.unparsed_lines[2].reason,
+        "invalid prefix-list length range: len <= ge <= le"
+    );
+
+    // IPv6 prefix list
+    assert_eq!(device.unparsed_lines[3].line_number, 7);
+    assert_eq!(
+        device.unparsed_lines[3].content,
+        "ipv6 prefix-list IPV6-PL seq 10 permit 2001:db8::/32"
+    );
+    assert_eq!(
+        device.unparsed_lines[3].reason,
+        "IPv6 prefix-lists are outside current IPv4 milestone scope"
+    );
+}
+
+#[test]
+fn test_prefix_list_rfc7951_json_serialization() {
+    let cfg = r#"
+hostname R1
+ip prefix-list FILTER-BGP seq 10 permit 10.0.0.0/8 ge 16 le 24
+ip prefix-list FILTER-BGP seq 20 deny 0.0.0.0/0 le 32
+"#;
+
+    let device = parse_ios_config(cfg, None);
+    let json_val = serde_json::to_value(&device).unwrap();
+
+    let expected = serde_json::json!({
+        "hostname": "R1",
+        "prefix-lists": [
+            {
+                "name": "FILTER-BGP",
+                "entries": [
+                    {
+                        "sequence": 10,
+                        "action": "permit",
+                        "prefix": "10.0.0.0/8",
+                        "ge": 16,
+                        "le": 24
+                    },
+                    {
+                        "sequence": 20,
+                        "action": "deny",
+                        "prefix": "0.0.0.0/0",
+                        "le": 32
+                    }
+                ]
+            }
+        ]
+    });
+
+    assert_eq!(json_val["hostname"], expected["hostname"]);
+    assert_eq!(json_val["prefix-lists"], expected["prefix-lists"]);
+}
