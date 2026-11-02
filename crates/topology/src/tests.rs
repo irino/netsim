@@ -8,6 +8,7 @@ fn make_device(hostname: &str, interfaces: Vec<Interface>) -> DeviceConfig {
         ospf: None,
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }
 }
