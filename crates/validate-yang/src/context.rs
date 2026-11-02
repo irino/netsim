@@ -60,6 +60,12 @@ pub const PINNED_MODULES: &[PinnedModule] = &[
         source_url: "https://raw.githubusercontent.com/holo-routing/holo/master/holo-yang/modules/ietf/ietf-bgp@2023-07-05.yang",
         description: "YANG Data Model for Border Gateway Protocol (BGP-4)",
     },
+    PinnedModule {
+        name: "ietf-routing-policy",
+        revision: "2021-10-11",
+        source_url: "https://raw.githubusercontent.com/holo-routing/holo/master/holo-yang/modules/ietf/ietf-routing-policy@2021-10-11.yang",
+        description: "YANG Data Model for Routing Policy Management (RFC 9067)",
+    },
 ];
 
 /// Creates an initialized libyang Context with all relevant pinned IETF modules loaded.
@@ -73,5 +79,6 @@ pub fn create_yang_context() -> Context {
     load_module(&mut ctx, "ietf-ipv4-unicast-routing");
     load_module(&mut ctx, "ietf-ospf");
     load_module(&mut ctx, "ietf-bgp");
+    load_module(&mut ctx, "ietf-routing-policy");
     ctx
 }

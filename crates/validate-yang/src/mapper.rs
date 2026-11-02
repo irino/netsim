@@ -14,6 +14,8 @@ pub struct YangInstanceDocuments {
     pub interfaces_json: Option<String>,
     /// RFC 8349 NMDA `ietf-routing:routing` document covering OSPF, BGP, and Static Routes.
     pub routing_json: Option<String>,
+    /// RFC 9067 `ietf-routing-policy:routing-policy` document covering prefix sets.
+    pub routing_policy_json: Option<String>,
     /// Uncovered fields and reasons why they are not mapped into the selected IETF YANG models.
     pub uncovered_fields: Vec<String>,
 }
@@ -233,6 +235,72 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
         None
     };
 
+    // 3. Map prefix-lists into ietf-routing-policy:routing-policy
+    let routing_policy_json = if !config.prefix_lists.is_empty() {
+        let mut prefix_sets = Vec::new();
+        for pl in &config.prefix_lists {
+            let mut prefixes = Vec::new();
+            for entry in &pl.entries {
+                let mut prefix_obj = serde_json::Map::new();
+                prefix_obj.insert("ip-prefix".to_string(), json!(entry.prefix.to_string()));
+                let lower = entry
+                    .range
+                    .as_ref()
+                    .and_then(|r| r.ge)
+                    .map(|ge| ge.value())
+                    .unwrap_or_else(|| entry.prefix.prefix_length.value());
+                let upper = entry
+                    .range
+                    .as_ref()
+                    .and_then(|r| r.le)
+                    .map(|le| le.value())
+                    .unwrap_or_else(|| {
+                        if let Some(ref r) = entry.range {
+                            if r.ge.is_some() {
+                                // In Cisco IOS, when 'ge' is specified without 'le', upper defaults to 32
+                                32
+                            } else {
+                                entry.prefix.prefix_length.value()
+                            }
+                        } else {
+                            entry.prefix.prefix_length.value()
+                        }
+                    });
+
+                prefix_obj.insert("mask-length-lower".to_string(), json!(lower));
+                prefix_obj.insert("mask-length-upper".to_string(), json!(upper));
+                prefixes.push(Value::Object(prefix_obj));
+            }
+
+            prefix_sets.push(json!({
+                "name": pl.name,
+                "mode": "ipv4",
+                "prefixes": {
+                    "prefix-list": prefixes
+                }
+            }));
+        }
+
+        let policy_container = json!({
+            "defined-sets": {
+                "prefix-sets": {
+                    "prefix-set": prefix_sets
+                }
+            }
+        });
+        root_obj.insert(
+            "ietf-routing-policy:routing-policy".to_string(),
+            policy_container.clone(),
+        );
+
+        let doc = json!({
+            "ietf-routing-policy:routing-policy": policy_container
+        });
+        Some(serde_json::to_string_pretty(&doc).expect("serialize routing policy json"))
+    } else {
+        None
+    };
+
     let combined_json =
         serde_json::to_string_pretty(&Value::Object(root_obj)).expect("serialize combined json");
 
@@ -252,6 +320,7 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
         combined_json,
         interfaces_json,
         routing_json,
+        routing_policy_json,
         uncovered_fields,
     }
 }
