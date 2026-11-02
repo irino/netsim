@@ -644,6 +644,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         ospf,
         bgp,
         static_routes,
+        prefix_lists: Vec::new(),
         unparsed_lines,
     }
 }

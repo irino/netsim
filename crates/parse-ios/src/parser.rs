@@ -1,8 +1,11 @@
 use ir::{
     BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
-    OspfProcess, PrefixLength, StaticRoute, UnparsedLine,
+    OspfProcess, PolicyAction, PrefixLength, PrefixList, PrefixListEntry, PrefixRange, StaticRoute,
+    UnparsedLine,
 };
+use std::collections::{BTreeMap, HashSet};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use winnow::ascii::{space0, space1};
 use winnow::combinator::seq;
 use winnow::error::{ErrMode, FromExternalError};
@@ -94,6 +97,9 @@ pub fn parse_ios_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut ospf_networks: Vec<ParsedOspfNetwork> = Vec::new();
     let mut bgp_process: Option<BgpProcess> = None;
     let mut static_routes = Vec::new();
+    let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
+    let mut prefix_list_seq_sets: BTreeMap<String, HashSet<u32>> = BTreeMap::new();
+    let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
     let mut unparsed_lines = Vec::new();
 
     let mut ctx = Context::Global;
@@ -319,6 +325,222 @@ pub fn parse_ios_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 content: line.to_string(),
                                 reason: "malformed ip route command".to_string(),
                             });
+                        }
+                    }
+                } else if line.starts_with("ipv6 prefix-list ") {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "IPv6 prefix-lists are outside current IPv4 milestone scope"
+                            .to_string(),
+                    });
+                } else if let Some(pl_tail) = line.strip_prefix("ip prefix-list ") {
+                    let tokens: Vec<&str> = pl_tail.split_whitespace().collect();
+                    if tokens.is_empty() {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed ip prefix-list command".to_string(),
+                        });
+                    } else {
+                        let name = tokens[0].to_string();
+                        // Ensure prefix list entry list exists
+                        prefix_lists_map.entry(name.clone()).or_default();
+
+                        let rest_tokens = &tokens[1..];
+                        if rest_tokens.is_empty() {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed ip prefix-list command".to_string(),
+                            });
+                        } else if rest_tokens[0] == "description" {
+                            // ip prefix-list <NAME> description <TEXT>: parsed without error
+                            // prefix list already created in prefix_lists_map
+                        } else {
+                            // Can be [seq <NUM>] {permit|deny} <PREFIX> [ge <GE>] [le <LE>]
+                            let mut cursor = 0;
+                            let mut explicit_seq = None;
+
+                            if rest_tokens.len() >= 2 && rest_tokens[cursor] == "seq" {
+                                if let Ok(s_num) = rest_tokens[cursor + 1].parse::<u32>() {
+                                    explicit_seq = Some(s_num);
+                                    cursor += 2;
+                                } else {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "invalid sequence number in prefix-list"
+                                            .to_string(),
+                                    });
+                                    continue;
+                                }
+                            }
+
+                            if cursor >= rest_tokens.len() {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "missing action in prefix-list command".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let action = match rest_tokens[cursor] {
+                                "permit" => Some(PolicyAction::Permit),
+                                "deny" => Some(PolicyAction::Deny),
+                                _ => None,
+                            };
+
+                            let action = match action {
+                                Some(a) => a,
+                                None => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: format!(
+                                            "unknown prefix-list action '{}'",
+                                            rest_tokens[cursor]
+                                        ),
+                                    });
+                                    continue;
+                                }
+                            };
+                            cursor += 1;
+
+                            if cursor >= rest_tokens.len() {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "missing prefix in prefix-list command".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let prefix_res = Ipv4Prefix::from_str(rest_tokens[cursor]);
+                            let prefix = match prefix_res {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: format!("invalid prefix '{}'", rest_tokens[cursor]),
+                                    });
+                                    continue;
+                                }
+                            };
+                            cursor += 1;
+
+                            // Parse optional ge and le
+                            let mut ge_val = None;
+                            let mut le_val = None;
+                            let mut parse_range_failed = false;
+
+                            while cursor < rest_tokens.len() {
+                                if rest_tokens[cursor] == "ge" && cursor + 1 < rest_tokens.len() {
+                                    if let Ok(v) = rest_tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(p_len) = PrefixLength::new(v) {
+                                            ge_val = Some(p_len);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else if rest_tokens[cursor] == "le"
+                                    && cursor + 1 < rest_tokens.len()
+                                {
+                                    if let Ok(v) = rest_tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(p_len) = PrefixLength::new(v) {
+                                            le_val = Some(p_len);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else {
+                                    parse_range_failed = true;
+                                    break;
+                                }
+                            }
+
+                            if parse_range_failed {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "malformed prefix-list range parameters".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let range = if ge_val.is_some() || le_val.is_some() {
+                                let r = PrefixRange {
+                                    ge: ge_val,
+                                    le: le_val,
+                                };
+                                if r.validate(prefix.prefix_length).is_err() {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "invalid prefix-list length range: len <= ge <= le"
+                                            .to_string(),
+                                    });
+                                    continue;
+                                }
+                                Some(r)
+                            } else {
+                                None
+                            };
+
+                            // Determine sequence number
+                            let seq_num = match explicit_seq {
+                                Some(n) => n,
+                                None => {
+                                    let next_seq = match prefix_list_last_seq.get(&name) {
+                                        Some(&last) => last + 5,
+                                        None => 5,
+                                    };
+                                    next_seq
+                                }
+                            };
+
+                            // Duplicate sequence number check
+                            let seq_set = prefix_list_seq_sets.entry(name.clone()).or_default();
+                            if seq_set.contains(&seq_num) {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: format!(
+                                        "duplicate sequence number {} in prefix-list {}",
+                                        seq_num, name
+                                    ),
+                                });
+                                continue;
+                            }
+                            seq_set.insert(seq_num);
+                            prefix_list_last_seq.insert(name.clone(), seq_num);
+
+                            prefix_lists_map
+                                .entry(name)
+                                .or_default()
+                                .push(PrefixListEntry {
+                                    sequence: seq_num,
+                                    action,
+                                    prefix,
+                                    range,
+                                });
                         }
                     }
                 } else {
@@ -570,12 +792,20 @@ pub fn parse_ios_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
     }
 
+    // Finalize prefix-lists: sort entries by sequence number
+    let mut prefix_lists = Vec::new();
+    for (name, mut entries) in prefix_lists_map {
+        entries.sort_by_key(|e| e.sequence);
+        prefix_lists.push(PrefixList { name, entries });
+    }
+
     DeviceConfig {
         hostname,
         interfaces,
         ospf: ospf_process,
         bgp: bgp_process,
         static_routes,
+        prefix_lists,
         unparsed_lines,
     }
 }

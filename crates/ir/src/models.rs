@@ -11,6 +11,8 @@ pub enum IrError {
     InvalidPrefixLength(u8),
     #[error("invalid IPv4 prefix format: '{0}'")]
     InvalidIpv4Prefix(String),
+    #[error("invalid prefix range: {0}")]
+    InvalidPrefixRange(String),
 }
 
 /// Validated IPv4 prefix length (0..=32).
@@ -259,6 +261,103 @@ pub struct BgpProcess {
     pub networks: Vec<Ipv4Prefix>,
 }
 
+/// Action for a routing policy or prefix-list entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicyAction {
+    Permit,
+    Deny,
+}
+
+/// Prefix length range constraint for prefix matching (ge, le).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixRange {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ge: Option<PrefixLength>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub le: Option<PrefixLength>,
+}
+
+impl PrefixRange {
+    /// Validate prefix-range constraints against the prefix length:
+    /// - If `ge` is set, `prefix_length <= ge <= 32`.
+    /// - If `le` is set, `prefix_length <= le <= 32`.
+    /// - If both `ge` and `le` are set, `ge <= le`.
+    pub fn validate(&self, prefix_len: PrefixLength) -> Result<(), IrError> {
+        let p_len = prefix_len.value();
+        if let Some(ge) = self.ge {
+            if ge.value() < p_len {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "ge {} cannot be smaller than prefix length {}",
+                    ge.value(),
+                    p_len
+                )));
+            }
+        }
+        if let Some(le) = self.le {
+            if le.value() < p_len {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "le {} cannot be smaller than prefix length {}",
+                    le.value(),
+                    p_len
+                )));
+            }
+        }
+        if let (Some(ge), Some(le)) = (self.ge, self.le) {
+            if ge.value() > le.value() {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "ge {} cannot be greater than le {}",
+                    ge.value(),
+                    le.value()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Serialize `Ipv4Prefix` as a string (`10.0.0.0/8`).
+pub mod ipv4_prefix_str {
+    use super::Ipv4Prefix;
+    use serde::{de, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(prefix: &Ipv4Prefix, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&prefix.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Ipv4Prefix, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<Ipv4Prefix>().map_err(de::Error::custom)
+    }
+}
+
+/// A single entry in an IPv4 prefix-list.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixListEntry {
+    pub sequence: u32,
+    pub action: PolicyAction,
+    #[serde(with = "ipv4_prefix_str")]
+    pub prefix: Ipv4Prefix,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub range: Option<PrefixRange>,
+}
+
+/// An IPv4 prefix list containing ordered entries.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixList {
+    pub name: String,
+    pub entries: Vec<PrefixListEntry>,
+}
+
 /// Unparsed or unsupported configuration line metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -283,6 +382,8 @@ pub struct DeviceConfig {
     pub bgp: Option<BgpProcess>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub static_routes: Vec<StaticRoute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prefix_lists: Vec<PrefixList>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unparsed_lines: Vec<UnparsedLine>,
 }

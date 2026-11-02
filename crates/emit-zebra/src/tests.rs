@@ -38,6 +38,7 @@ fn make_basic_device() -> DeviceConfig {
         }),
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }
 }
@@ -50,6 +51,7 @@ fn test_hostname_generation() {
         ospf: None,
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -99,6 +101,7 @@ fn test_static_routes_emission() {
                 next_hop: Ipv4Addr::new(10, 0, 0, 2),
             },
         ],
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -127,6 +130,7 @@ fn test_bgp_emission() {
             networks: vec!["192.168.1.0/24".parse().unwrap()],
         }),
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -177,6 +181,7 @@ fn test_emit_warnings_for_unsupported_features() {
         }),
         bgp: None,
         static_routes: Vec::new(),
+        prefix_lists: Vec::new(),
         unparsed_lines: vec![ir::UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
             line_number: 12,
