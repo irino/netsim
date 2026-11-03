@@ -284,7 +284,9 @@ dependencies = [
  "emit-clab",
  "emit-zebra",
  "ir",
+ "parse-eos",
  "parse-ios",
+ "parse-iosxr",
  "parse-junos",
  "thiserror",
  "topology",
@@ -323,7 +325,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "parse-eos"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "winnow",
+]
+
+[[package]]
 name = "parse-ios"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "winnow",
+]
+
+[[package]]
+name = "parse-iosxr"
 version = "0.1.0"
 dependencies = [
  "ir",

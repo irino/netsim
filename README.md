@@ -7,6 +7,8 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/ir`: Vendor-independent Intermediate Representation data models (`DeviceConfig`, `Interface`, `OspfProcess`, `UnparsedLine`, `Ipv4Prefix`, `PrefixLength`, `OspfAreaId`) aligned with IETF YANG models.
 - `crates/parse-ios`: Cisco IOS configuration parser built with `winnow`.
 - `crates/parse-junos`: Junos set-format configuration parser built with `winnow`.
+- `crates/parse-eos`: Arista EOS configuration parser built with `winnow`.
+- `crates/parse-iosxr`: Cisco IOS XR configuration parser built with `winnow`.
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
@@ -45,8 +47,24 @@ cargo run --bin netsim -- convert \
   --out junos-r2.zebra.yaml
 ```
 
+#### Arista EOS Example:
+```bash
+cargo run --bin netsim -- convert \
+  --vendor eos \
+  --in examples/mixed-3vendors/arista-r3.cfg \
+  --out arista-r3.zebra.yaml
+```
+
+#### Cisco IOS XR Example:
+```bash
+cargo run --bin netsim -- convert \
+  --vendor iosxr \
+  --in examples/mixed-4vendors/iosxr-r4.cfg \
+  --out iosxr-r4.zebra.yaml
+```
+
 **Options**:
-- `--vendor <ios|junos>`: Input vendor configuration format (`ios` or `junos`; default: `ios`).
+- `--vendor <ios|junos|eos|iosxr>`: Input vendor configuration format (`ios`, `junos`, `eos`, or `iosxr`; default: `ios`).
 - `--in <FILE>`: Path to the input vendor configuration file.
 - `--out <FILE>`: Destination path for the generated zebra-rs YAML configuration.
 
@@ -76,6 +94,12 @@ cargo run --bin netsim -- gen-lab \
 # Mixed Cisco IOS and Junos multi-vendor topology
 cargo run --bin netsim -- gen-lab \
   --configs ./examples/mixed-ios-junos/ \
+  --out ./lab-mixed/ \
+  --lab-name mixed-lab
+
+# Mixed 3-vendor Cisco IOS, Junos, and Arista EOS topology
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/mixed-3vendors/ \
   --out ./lab-mixed/ \
   --lab-name mixed-lab
 ```
@@ -196,6 +220,60 @@ The initial Cisco IOS parser supports:
   - Process creation: `router ospf <PROCESS_ID>`
   - Router ID: `router-id <A.B.C.D>`
   - Network statements: `network <ADDRESS> <WILDCARD> area <AREA>` (supports integer and dotted-quad area IDs, as well as non-contiguous wildcard mask bitwise matching).
+
+Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## Supported Arista EOS Syntax (`crates/parse-eos`)
+
+The Arista EOS parser supports:
+
+- **Hostname**: `hostname <NAME>`
+- **Interfaces**:
+  - `interface <NAME>` (e.g., `interface Ethernet1`, `interface Loopback0`)
+  - Description: `description <TEXT>`
+  - IPv4 address in CIDR or subnet mask format: `ip address <A.B.C.D/LEN>` or `ip address <A.B.C.D> <NETMASK>`
+  - Admin state: `shutdown`, `no shutdown`
+  - Interface-level OSPF: `ip ospf area <AREA>`, `ip ospf cost <COST>`
+- **Static Routes**:
+  - CIDR and mask syntax: `ip route <DEST/LEN> <NEXT_HOP>` and `ip route <DEST> <NETMASK> <NEXT_HOP>`
+- **OSPF Protocol**:
+  - Process creation: `router ospf <PROCESS_ID>`
+  - Router ID: `router-id <A.B.C.D>`
+  - Network statements: `network <PREFIX/LEN> area <AREA>` and `network <ADDRESS> <WILDCARD> area <AREA>`
+- **BGP Protocol**:
+  - Process creation: `router bgp <AS>`
+  - Router ID: `router-id <A.B.C.D>`
+  - Neighbor: `neighbor <A.B.C.D> remote-as <AS>`
+  - Network: `network <PREFIX/LEN>` and `network <ADDRESS> mask <NETMASK>`
+- **Prefix Lists**:
+  - `ip prefix-list <NAME> [seq <SEQ>] {permit|deny} <PREFIX/LEN> [ge <GE>] [le <LE>]`
+
+Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## Supported Cisco IOS XR Syntax (`crates/parse-iosxr`)
+
+The Cisco IOS XR parser supports:
+
+- **Hostname**: `hostname <NAME>`
+- **Interfaces**:
+  - `interface <NAME>` (e.g., `interface GigabitEthernet0/0/0/0`, `interface Loopback0`)
+  - Description: `description <TEXT>`
+  - IPv4 address in CIDR or netmask format: `ipv4 address <A.B.C.D/LEN>` or `ipv4 address <A.B.C.D> <NETMASK>`
+  - Admin state: `shutdown`, `no shutdown`
+- **Static Routes**:
+  - `router static` with `address-family ipv4 unicast` destinations and next-hops: `<DEST/LEN> <NEXT_HOP>`
+- **OSPF Protocol**:
+  - `router ospf <PROCESS_ID>`
+  - Router ID: `router-id <A.B.C.D>`
+  - Hierarchical areas: `area <AREA>`
+  - Nested interfaces within area: `interface <NAME>` (`cost <COST>`, `passive enable`)
+- **BGP Protocol**:
+  - `router bgp <AS>`
+  - Router ID: `bgp router-id <A.B.C.D>`
+  - Peer configuration: `neighbor <A.B.C.D>` (`remote-as <AS>`)
+  - Network advertisements: `address-family ipv4 unicast` (`network <PREFIX/LEN>`)
+- **Prefix Sets**:
+  - `prefix-set <NAME>` with prefix entries (`<PREFIX/LEN> [ge <GE>] [le <LE>]`) terminated by `end-set`
 
 Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
 
