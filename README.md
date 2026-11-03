@@ -9,6 +9,7 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/parse-junos`: Junos set-format configuration parser built with `winnow`.
 - `crates/parse-eos`: Arista EOS configuration parser built with `winnow`.
 - `crates/parse-iosxr`: Cisco IOS XR configuration parser built with `winnow`.
+- `crates/parse-frr`: FRRouting / SONiC configuration parser built with `winnow`.
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
 - `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
@@ -63,8 +64,16 @@ cargo run --bin netsim -- convert \
   --out iosxr-r4.zebra.yaml
 ```
 
+#### FRRouting / SONiC Example:
+```bash
+cargo run --bin netsim -- convert \
+  --vendor frr \
+  --in examples/mixed-5vendors/frr-r5.cfg \
+  --out frr-r5.zebra.yaml
+```
+
 **Options**:
-- `--vendor <ios|junos|eos|iosxr>`: Input vendor configuration format (`ios`, `junos`, `eos`, or `iosxr`; default: `ios`).
+- `--vendor <ios|junos|eos|iosxr|frr>`: Input vendor configuration format (`ios`, `junos`, `eos`, `iosxr`, or `frr`; default: `ios`).
 - `--in <FILE>`: Path to the input vendor configuration file.
 - `--out <FILE>`: Destination path for the generated zebra-rs YAML configuration.
 
@@ -100,6 +109,12 @@ cargo run --bin netsim -- gen-lab \
 # Mixed 3-vendor Cisco IOS, Junos, and Arista EOS topology
 cargo run --bin netsim -- gen-lab \
   --configs ./examples/mixed-3vendors/ \
+  --out ./lab-mixed/ \
+  --lab-name mixed-lab
+
+# Mixed 5-vendor Cisco IOS, Junos, Arista EOS, Cisco IOS XR, and FRRouting topology
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/mixed-5vendors/ \
   --out ./lab-mixed/ \
   --lab-name mixed-lab
 ```
@@ -274,6 +289,33 @@ The Cisco IOS XR parser supports:
   - Network advertisements: `address-family ipv4 unicast` (`network <PREFIX/LEN>`)
 - **Prefix Sets**:
   - `prefix-set <NAME>` with prefix entries (`<PREFIX/LEN> [ge <GE>] [le <LE>]`) terminated by `end-set`
+
+Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
+
+## Supported FRRouting / SONiC Syntax (`crates/parse-frr`)
+
+The FRRouting / SONiC parser supports:
+
+- **Hostname**: `hostname <NAME>`
+- **Interfaces**:
+  - `interface <NAME>` (e.g., `interface eth0`, `interface swp1`, `interface lo`)
+  - Description: `description <TEXT>`
+  - IPv4 address: `ip address <A.B.C.D/LEN>` or `ip address <A.B.C.D> <NETMASK>`
+  - Admin state: `shutdown`, `no shutdown`
+  - Interface-level OSPF: `ip ospf area <AREA>`, `ip ospf cost <COST>`, `ip ospf passive`
+- **Static Routes**:
+  - `ip route <DEST/LEN> <NEXT_HOP>` and `ip route <DEST> <NETMASK> <NEXT_HOP>`
+- **OSPF Protocol**:
+  - `router ospf`
+  - Router ID: `ospf router-id <A.B.C.D>` or `router-id <A.B.C.D>`
+  - Network statements: `network <PREFIX/LEN> area <AREA>` and `network <ADDRESS> <WILDCARD> area <AREA>`
+- **BGP Protocol**:
+  - `router bgp <AS>`
+  - Router ID: `bgp router-id <A.B.C.D>`
+  - Neighbor: `neighbor <A.B.C.D> remote-as <AS>`
+  - Network: `network <PREFIX/LEN>` (top-level or within `address-family ipv4 unicast`)
+- **Prefix Lists**:
+  - `ip prefix-list <NAME> [seq <SEQ>] {permit|deny} <PREFIX/LEN> [ge <GE>] [le <LE>]`
 
 Unrecognized or unsupported lines are preserved in `UnparsedLine` structs recording filename, 1-based line number, original content, and reason.
 

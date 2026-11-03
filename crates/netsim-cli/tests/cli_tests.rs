@@ -161,6 +161,46 @@ router ospf 1
 }
 
 #[test]
+fn test_convert_frr_success() {
+    let tmp = create_temp_dir("convert_frr_ok");
+    let in_file = tmp.join("frr1.conf");
+    let out_file = tmp.join("frr1.zebra.yaml");
+
+    let cfg_content = r#"!
+frr version 8.1
+hostname frr1
+!
+interface eth0
+ ip address 10.0.0.1/24
+ no shutdown
+!
+router ospf
+ ospf router-id 10.255.0.1
+ network 10.0.0.0/24 area 0
+!
+"#;
+    fs::write(&in_file, cfg_content).unwrap();
+
+    let cli = Cli {
+        command: Commands::Convert {
+            vendor: "frr".to_string(),
+            r#in: in_file.clone(),
+            out: out_file.clone(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(res.is_ok());
+
+    assert!(out_file.exists());
+    let emitted = fs::read_to_string(&out_file).unwrap();
+    assert!(emitted.contains("hostname: frr1"));
+    assert!(emitted.contains("- 10.0.0.1/24"));
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_convert_invalid_vendor_or_missing_file() {
     let tmp = create_temp_dir("convert_err");
     let in_file = tmp.join("missing.cfg");

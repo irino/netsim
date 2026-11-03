@@ -19,6 +19,9 @@ A multi-vendor 3-router ring/triangle network interconnecting Cisco IOS (`cisco-
 ### `mixed-4vendors`
 A multi-vendor 4-router topology interconnecting Cisco IOS (`cisco-r1.cfg`), Junos (`junos-r2.set`), Arista EOS (`arista-r3.cfg`), and Cisco IOS XR (`iosxr-r4.cfg`) running OSPFv2 across `/30` point-to-point links.
 
+### `mixed-5vendors`
+A multi-vendor 5-router topology interconnecting Cisco IOS (`cisco-r1.cfg`), Junos (`junos-r2.set`), Arista EOS (`arista-r3.cfg`), Cisco IOS XR (`iosxr-r4.cfg`), and FRRouting / SONiC (`frr-r5.cfg`) running OSPFv2 across `/30` point-to-point links.
+
 - **Topology Summary**:
   - `R1`: Loopback0 (`1.1.1.1/32`), GigabitEthernet0/0 (`10.0.12.1/24` -> R2), GigabitEthernet0/1 (`10.0.13.1/24` -> R3)
   - `R2`: Loopback0 (`2.2.2.2/32`), GigabitEthernet0/0 (`10.0.12.2/24` -> R1), GigabitEthernet0/1 (`10.0.23.2/24` -> R3)
@@ -73,7 +76,7 @@ cargo run --bin netsim -- convert --vendor ios --in examples/ospf-3routers/R1.cf
 ```
 
 **Options**:
-- `--vendor <VENDOR>`: Vendor input format (currently supports `ios`, `junos`, `eos`, and `iosxr`).
+- `--vendor <VENDOR>`: Vendor input format (currently supports `ios`, `junos`, `eos`, `iosxr`, and `frr`).
 - `--in <FILE>`: Path to input vendor configuration file.
 - `--out <FILE>`: Path to destination zebra-rs YAML configuration file.
 
