@@ -13,6 +13,7 @@ parse-ios = { path = "../parse-ios" }
 parse-junos = { path = "../parse-junos" }
 parse-eos = { path = "../parse-eos" }
 parse-iosxr = { path = "../parse-iosxr" }
+parse-frr = { path = "../parse-frr" }
 topology = { path = "../topology" }
 emit-zebra = { path = "../emit-zebra" }
 emit-clab = { path = "../emit-clab" }

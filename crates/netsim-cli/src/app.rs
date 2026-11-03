@@ -3,6 +3,7 @@ use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
 use ir::DeviceConfig;
 use parse_eos::parse_eos_config;
+use parse_frr::parse_frr_config;
 use parse_ios::parse_ios_config;
 use parse_iosxr::parse_iosxr_config;
 use parse_junos::parse_junos_config;
@@ -15,7 +16,7 @@ use topology::infer_topology;
 pub enum CliError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos, eos, iosxr")]
+    #[error("Unsupported vendor '{0}'. Supported vendors: ios, junos, eos, iosxr, frr")]
     UnsupportedVendor(String),
     #[error("No configuration files found in '{0}'")]
     NoConfigsFound(PathBuf),
@@ -89,6 +90,7 @@ fn detect_and_parse_config(
         Some("junos") | Some("juniper") => Ok(parse_junos_config(content, filename)),
         Some("eos") | Some("arista") => Ok(parse_eos_config(content, filename)),
         Some("iosxr") | Some("ios-xr") | Some("xr") => Ok(parse_iosxr_config(content, filename)),
+        Some("frr") | Some("sonic") => Ok(parse_frr_config(content, filename)),
         Some(v) => Err(CliError::UnsupportedVendor(v.to_string())),
         None => {
             // Auto-detect:
@@ -115,6 +117,9 @@ fn detect_and_parse_config(
                 if f_low.contains("eos") || f_low.contains("arista") {
                     return Ok(parse_eos_config(content, filename));
                 }
+                if f_low.contains("frr") || f_low.contains("sonic") {
+                    return Ok(parse_frr_config(content, filename));
+                }
             }
 
             // 3. If content contains Cisco IOS XR signatures
@@ -132,7 +137,19 @@ fn detect_and_parse_config(
                 return Ok(parse_iosxr_config(content, filename));
             }
 
-            // 4. If content contains Arista EOS signatures
+            // 4. If content contains FRRouting / SONiC signatures
+            let is_frr = content.lines().any(|l| {
+                let t = l.trim();
+                t.starts_with("frr version")
+                    || t.starts_with("frr defaults")
+                    || t.starts_with("ospf router-id")
+            });
+
+            if is_frr {
+                return Ok(parse_frr_config(content, filename));
+            }
+
+            // 5. If content contains Arista EOS signatures
             let is_eos = content.lines().any(|l| {
                 let t = l.trim();
                 t.contains("EOS-")
@@ -163,6 +180,8 @@ pub fn run_convert(vendor: &str, in_path: &Path, out_path: &Path) -> Result<(), 
         && vendor_lower != "iosxr"
         && vendor_lower != "ios-xr"
         && vendor_lower != "xr"
+        && vendor_lower != "frr"
+        && vendor_lower != "sonic"
     {
         return Err(CliError::UnsupportedVendor(vendor.to_string()));
     }

@@ -285,6 +285,7 @@ dependencies = [
  "emit-zebra",
  "ir",
  "parse-eos",
+ "parse-frr",
  "parse-ios",
  "parse-iosxr",
  "parse-junos",
@@ -326,6 +327,17 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "parse-eos"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "winnow",
+]
+
+[[package]]
+name = "parse-frr"
 version = "0.1.0"
 dependencies = [
  "ir",
