@@ -120,3 +120,77 @@ router bgp 65100
     );
     assert_eq!(pl.entries[1].prefix.to_string(), "192.168.0.0/16");
 }
+
+#[test]
+fn test_parse_iosxr_ipv6() {
+    let input = r#"!RANCID-CONTENT-TYPE: cisco-xr
+!
+hostname iosxr-v6
+!
+interface GigabitEthernet0/0/0/0
+ description IPv6 interface
+ ipv6 address 2001:db8:1::1/64
+ no shutdown
+!
+router static
+ address-family ipv6 unicast
+  2001:db8:2::/64 2001:db8:1::2
+ !
+!
+router ospfv3 100
+ router-id 1.1.1.1
+ area 0
+  interface GigabitEthernet0/0/0/0
+   cost 20
+  !
+ !
+!
+router bgp 65001
+ bgp router-id 1.1.1.1
+ address-family ipv6 unicast
+  network 2001:db8:2::/64
+ !
+ neighbor 2001:db8:1::2
+  remote-as 65002
+ !
+!
+"#;
+    let dev = parse_iosxr_config(input, Some("iosxr-v6.cfg"));
+    assert_eq!(dev.hostname, "iosxr-v6");
+    assert_eq!(dev.interfaces.len(), 1);
+    let iface = &dev.interfaces[0];
+    assert_eq!(iface.name, "GigabitEthernet0/0/0/0");
+    assert_eq!(iface.ipv6.as_ref().unwrap().to_string(), "2001:db8:1::1/64");
+    assert!(iface.ospfv3.is_some());
+    let ospfv3 = iface.ospfv3.as_ref().unwrap();
+    assert_eq!(ospfv3.area, ir::OspfAreaId::Number(0));
+    assert_eq!(ospfv3.cost, Some(20));
+
+    assert_eq!(dev.static_routes_v6.len(), 1);
+    assert_eq!(
+        dev.static_routes_v6[0].destination.to_string(),
+        "2001:db8:2::/64"
+    );
+    assert_eq!(
+        dev.static_routes_v6[0].next_hop.to_string(),
+        "2001:db8:1::2"
+    );
+
+    assert!(dev.ospfv3.is_some());
+    assert_eq!(dev.ospfv3.as_ref().unwrap().process_id, 100);
+    assert_eq!(
+        dev.ospfv3.as_ref().unwrap().router_id,
+        Some(Ipv4Addr::new(1, 1, 1, 1))
+    );
+
+    assert!(dev.bgp.is_some());
+    let bgp = dev.bgp.as_ref().unwrap();
+    assert_eq!(bgp.neighbors_v6.len(), 1);
+    assert_eq!(
+        bgp.neighbors_v6[0].remote_address.to_string(),
+        "2001:db8:1::2"
+    );
+    assert_eq!(bgp.neighbors_v6[0].remote_as, 65002);
+    assert_eq!(bgp.networks_v6.len(), 1);
+    assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
+}

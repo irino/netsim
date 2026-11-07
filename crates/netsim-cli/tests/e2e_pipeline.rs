@@ -681,3 +681,94 @@ fn test_e2e_ebgp_2routers_pipeline() {
 
     let _ = fs::remove_dir_all(&tmp_out);
 }
+
+#[test]
+fn test_e2e_mixed_5vendors_ipv6_pipeline() {
+    let example_dir = find_examples_dir("mixed-5vendors-ipv6");
+
+    let cisco_content = fs::read_to_string(example_dir.join("cisco-r1.cfg")).unwrap();
+    let junos_content = fs::read_to_string(example_dir.join("junos-r2.set")).unwrap();
+    let arista_content = fs::read_to_string(example_dir.join("arista-r3.cfg")).unwrap();
+    let iosxr_content = fs::read_to_string(example_dir.join("iosxr-r4.cfg")).unwrap();
+    let frr_content = fs::read_to_string(example_dir.join("frr-r5.cfg")).unwrap();
+
+    let r1 = parse_ios_config(&cisco_content, Some("cisco-r1.cfg"));
+    let r2 = parse_junos_config(&junos_content, Some("junos-r2.set"));
+    let r3 = parse_eos_config(&arista_content, Some("arista-r3.cfg"));
+    let r4 = parse_iosxr_config(&iosxr_content, Some("iosxr-r4.cfg"));
+    let r5 = parse_frr_config(&frr_content, Some("frr-r5.cfg"));
+
+    assert_eq!(r1.hostname, "cisco-r1");
+    assert_eq!(r2.hostname, "junos-r2");
+    assert_eq!(r3.hostname, "arista-r3");
+    assert_eq!(r4.hostname, "iosxr-r4");
+    assert_eq!(r5.hostname, "frr-r5");
+
+    assert!(r1.ospfv3.is_some());
+    assert!(r2.ospfv3.is_some());
+    assert!(r3.ospfv3.is_some());
+    assert!(r4.ospfv3.is_some());
+    assert!(r5.ospfv3.is_some());
+
+    let devices = vec![r1, r2, r3, r4, r5];
+
+    let topo = infer_topology(&devices);
+    assert_eq!(
+        topo.links.len(),
+        5,
+        "Expected 5 point-to-point IPv6 links across 5 routers"
+    );
+    assert!(topo.warnings.is_empty());
+
+    let subnets: Vec<String> = topo.links.iter().map(|l| l.subnet.to_string()).collect();
+    assert!(subnets.contains(&"2001:db8:12::/64".to_string()));
+    assert!(subnets.contains(&"2001:db8:13::/64".to_string()));
+    assert!(subnets.contains(&"2001:db8:23::/64".to_string()));
+    assert!(subnets.contains(&"2001:db8:34::/64".to_string()));
+    assert!(subnets.contains(&"2001:db8:45::/64".to_string()));
+
+    for dev in &devices {
+        let zebra_res = emit_zebra(dev).unwrap();
+        assert!(zebra_res
+            .yaml
+            .contains(&format!("hostname: {}", dev.hostname)));
+        assert!(zebra_res.yaml.contains("interface:"));
+        assert!(zebra_res.yaml.contains("ipv6:"));
+    }
+
+    // Test CLI gen-lab on mixed-5vendors-ipv6
+    let tmp_out = create_temp_dir("mixed5_v6_cli");
+    let cli = Cli {
+        command: Commands::GenLab {
+            configs: example_dir,
+            out: tmp_out.clone(),
+            lab_name: "ipv6-lab".to_string(),
+        },
+    };
+
+    let res = run(cli);
+    assert!(
+        res.is_ok(),
+        "CLI gen-lab command must succeed for mixed 5-vendor IPv6 directory"
+    );
+
+    assert!(tmp_out.join("cisco-r1.zebra.yaml").exists());
+    assert!(tmp_out.join("junos-r2.zebra.yaml").exists());
+    assert!(tmp_out.join("arista-r3.zebra.yaml").exists());
+    assert!(tmp_out.join("iosxr-r4.zebra.yaml").exists());
+    assert!(tmp_out.join("frr-r5.zebra.yaml").exists());
+    assert!(tmp_out.join("topology.clab.yml").exists());
+    assert!(tmp_out.join("report.md").exists());
+
+    let report_content = fs::read_to_string(tmp_out.join("report.md")).unwrap();
+    assert!(report_content.contains("**Lab Name**: `ipv6-lab`"));
+    assert!(report_content.contains("**Devices Processed**: 5"));
+    assert!(report_content.contains("2001:db8:12::/64"));
+
+    let clab_yaml = fs::read_to_string(tmp_out.join("topology.clab.yml")).unwrap();
+    assert!(clab_yaml.contains("name: ipv6-lab"));
+    assert!(clab_yaml.contains("cisco-r1:eth1"));
+    assert!(clab_yaml.contains("junos-r2:eth1"));
+
+    let _ = fs::remove_dir_all(&tmp_out);
+}

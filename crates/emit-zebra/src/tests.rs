@@ -1,7 +1,7 @@
 use super::*;
 use ir::{
-    BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
-    OspfProcess, StaticRoute,
+    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
+    Ipv4Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, StaticRoute,
 };
 use std::net::Ipv4Addr;
 
@@ -14,30 +14,36 @@ fn make_basic_device() -> DeviceConfig {
                 description: Some("Uplink to Core".to_string()),
                 enabled: true,
                 ipv4: Some("10.0.0.1/24".parse::<Ipv4Prefix>().unwrap()),
+                ipv6: None,
                 ospf: Some(InterfaceOspfConfig {
                     area: OspfAreaId::Number(0),
                     cost: Some(10),
                     passive: None,
                 }),
+                ospfv3: None,
             },
             Interface {
                 name: "enp0s7".to_string(),
                 description: Some("Area 1 interface".to_string()),
                 enabled: true,
                 ipv4: Some("192.168.1.1/24".parse::<Ipv4Prefix>().unwrap()),
+                ipv6: None,
                 ospf: Some(InterfaceOspfConfig {
                     area: OspfAreaId::Ipv4(Ipv4Addr::new(0, 0, 0, 1)),
                     cost: Some(20),
                     passive: Some(true),
                 }),
+                ospfv3: None,
             },
         ],
         ospf: Some(OspfProcess {
             process_id: 1,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        ospfv3: None,
         bgp: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }
@@ -49,8 +55,10 @@ fn test_hostname_generation() {
         hostname: "test-node".to_string(),
         interfaces: Vec::new(),
         ospf: None,
+        ospfv3: None,
         bgp: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -90,6 +98,7 @@ fn test_static_routes_emission() {
         hostname: "R-STATIC".to_string(),
         interfaces: Vec::new(),
         ospf: None,
+        ospfv3: None,
         bgp: None,
         static_routes: vec![
             StaticRoute {
@@ -101,6 +110,7 @@ fn test_static_routes_emission() {
                 next_hop: Ipv4Addr::new(10, 0, 0, 2),
             },
         ],
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -120,6 +130,7 @@ fn test_bgp_emission() {
         hostname: "R-BGP".to_string(),
         interfaces: Vec::new(),
         ospf: None,
+        ospfv3: None,
         bgp: Some(BgpProcess {
             as_number: 65001,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
@@ -128,8 +139,11 @@ fn test_bgp_emission() {
                 remote_as: 65002,
             }],
             networks: vec!["192.168.1.0/24".parse().unwrap()],
+            neighbors_v6: Vec::new(),
+            networks_v6: Vec::new(),
         }),
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -173,14 +187,18 @@ fn test_emit_warnings_for_unsupported_features() {
             description: Some("Disabled test link".to_string()),
             enabled: false,
             ipv4: Some("10.0.0.1/24".parse().unwrap()),
+            ipv6: None,
             ospf: None,
+            ospfv3: None,
         }],
         ospf: Some(OspfProcess {
             process_id: 10,
             router_id: None,
         }),
+        ospfv3: None,
         bgp: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: vec![ir::UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
@@ -209,8 +227,10 @@ fn test_prefix_lists_warning_emission() {
         hostname: "R_POLICY".to_string(),
         interfaces: Vec::new(),
         ospf: None,
+        ospfv3: None,
         bgp: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: vec![ir::PrefixList {
             name: "TEST_PL".to_string(),
             entries: vec![ir::PrefixListEntry {
@@ -229,4 +249,57 @@ fn test_prefix_lists_warning_emission() {
     assert!(result.warnings[0]
         .message
         .contains("pending routing-policy schema integration"));
+}
+
+#[test]
+fn test_ipv6_emission() {
+    let dev = DeviceConfig {
+        hostname: "R-V6".to_string(),
+        interfaces: vec![Interface {
+            name: "eth1".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: None,
+            ipv6: Some("2001:db8:1::1/64".parse().unwrap()),
+            ospf: None,
+            ospfv3: Some(InterfaceOspfConfig {
+                area: OspfAreaId::Number(0),
+                cost: Some(10),
+                passive: None,
+            }),
+        }],
+        ospf: None,
+        ospfv3: Some(Ospf6Process {
+            process_id: 1,
+            router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
+        }),
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
+            neighbors: Vec::new(),
+            networks: Vec::new(),
+            neighbors_v6: vec![BgpNeighborV6 {
+                remote_address: "2001:db8:1::2".parse().unwrap(),
+                remote_as: 65002,
+            }],
+            networks_v6: vec!["2001:db8:2::/64".parse().unwrap()],
+        }),
+        static_routes: Vec::new(),
+        static_routes_v6: vec![Ipv6StaticRoute {
+            destination: "2001:db8:100::/48".parse().unwrap(),
+            next_hop: "2001:db8:1::2".parse().unwrap(),
+        }],
+        prefix_lists: Vec::new(),
+        unparsed_lines: Vec::new(),
+    };
+
+    let yaml = emit_zebra_yaml(&dev).unwrap();
+    assert!(yaml.contains("ip6:"));
+    assert!(yaml.contains("destination: 2001:db8:100::/48"));
+    assert!(yaml.contains("next-hop: 2001:db8:1::2"));
+    assert!(yaml.contains("ipv6:"));
+    assert!(yaml.contains("- 2001:db8:1::1/64"));
+    assert!(yaml.contains("ospf6:"));
+    assert!(yaml.contains("peer-address: 2001:db8:1::2"));
+    assert!(yaml.contains("- 2001:db8:2::/64"));
 }

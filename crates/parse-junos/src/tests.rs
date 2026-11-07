@@ -184,3 +184,49 @@ set policy-options prefix-list PL-DEFAULT 0.0.0.0/0
 
     assert!(dev.unparsed_lines.is_empty());
 }
+
+#[test]
+fn test_parse_junos_ipv6() {
+    let input = r#"
+set system host-name "junos-v6"
+set interfaces ge-0/0/0 unit 0 description "IPv6 interface"
+set interfaces ge-0/0/0 unit 0 family inet6 address 2001:db8:1::1/64
+set routing-options rib inet6.0 static route 2001:db8:2::/64 next-hop 2001:db8:1::2
+set protocols ospf3 area 0.0.0.0 interface ge-0/0/0.0 metric 15
+set protocols ospf3 area 0.0.0.0 interface ge-0/0/0.0 passive
+set protocols bgp group ebgp-v6 neighbor 2001:db8:1::2 peer-as 65002
+set protocols bgp local-as 65001
+"#;
+    let dev = parse_junos_config(input, Some("junos-v6.set"));
+    assert_eq!(dev.hostname, "junos-v6");
+    assert_eq!(dev.interfaces.len(), 1);
+
+    let iface = &dev.interfaces[0];
+    assert_eq!(iface.name, "ge-0/0/0.0");
+    assert_eq!(iface.ipv6.as_ref().unwrap().to_string(), "2001:db8:1::1/64");
+    assert!(iface.ospfv3.is_some());
+    let ospf3 = iface.ospfv3.as_ref().unwrap();
+    assert_eq!(ospf3.cost, Some(15));
+    assert_eq!(ospf3.passive, Some(true));
+
+    assert_eq!(dev.static_routes_v6.len(), 1);
+    assert_eq!(
+        dev.static_routes_v6[0].destination.to_string(),
+        "2001:db8:2::/64"
+    );
+    assert_eq!(
+        dev.static_routes_v6[0].next_hop.to_string(),
+        "2001:db8:1::2"
+    );
+
+    assert!(dev.ospfv3.is_some());
+    assert!(dev.bgp.is_some());
+    let bgp = dev.bgp.as_ref().unwrap();
+    assert_eq!(bgp.as_number, 65001);
+    assert_eq!(bgp.neighbors_v6.len(), 1);
+    assert_eq!(
+        bgp.neighbors_v6[0].remote_address.to_string(),
+        "2001:db8:1::2"
+    );
+    assert_eq!(bgp.neighbors_v6[0].remote_as, 65002);
+}

@@ -1,7 +1,7 @@
 use ir::{DeviceConfig, OspfAreaId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -21,6 +21,27 @@ pub struct EmitWarning {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraSystem {
     pub hostname: String,
+}
+
+/// zebra-rs static IPv6 route entry (`ip6 -> route`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraStaticRouteV6 {
+    pub destination: String,
+    #[serde(rename = "next-hop")]
+    pub next_hop: Ipv6Addr,
+}
+
+/// zebra-rs IPv6 level configuration container (`ip6`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraIp6 {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub route: Vec<ZebraStaticRouteV6>,
+}
+
+/// zebra-rs IPv6 interface address container (`interface -> ipv6`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraInterfaceIpv6 {
+    pub address: Vec<String>,
 }
 
 /// zebra-rs static route entry (`ip -> route`).
@@ -50,6 +71,8 @@ pub struct ZebraInterface {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ipv4: Option<ZebraInterfaceIpv4>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<ZebraInterfaceIpv6>,
 }
 
 /// zebra-rs OSPF interface entry (`router -> ospf -> area -> interface`).
@@ -90,6 +113,14 @@ pub struct ZebraBgpNeighbor {
     pub remote_as: u32,
 }
 
+/// zebra-rs BGP IPv6 neighbor configuration (`router -> bgp -> neighbor-v6`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgpNeighborV6 {
+    pub peer_address: Ipv6Addr,
+    pub remote_as: u32,
+}
+
 /// zebra-rs BGP protocol configuration (`router -> bgp`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -102,6 +133,10 @@ pub struct ZebraBgp {
     pub neighbor: Vec<ZebraBgpNeighbor>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub network: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub neighbor_v6: Vec<ZebraBgpNeighborV6>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub network_v6: Vec<String>,
 }
 
 /// zebra-rs routing protocols container (`router`).
@@ -109,6 +144,8 @@ pub struct ZebraBgp {
 pub struct ZebraRouter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf: Option<ZebraOspf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ospf6: Option<ZebraOspf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bgp: Option<ZebraBgp>,
 }
@@ -119,6 +156,8 @@ pub struct ZebraConfig {
     pub system: ZebraSystem,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<ZebraIp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip6: Option<ZebraIp6>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub interface: Vec<ZebraInterface>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,9 +199,30 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         None
     };
 
+    // Static IPv6 routes under `ip6 -> route`
+    let ip6 = if !device.static_routes_v6.is_empty() {
+        let mut routes: Vec<ZebraStaticRouteV6> = device
+            .static_routes_v6
+            .iter()
+            .map(|r| ZebraStaticRouteV6 {
+                destination: r.destination.to_string(),
+                next_hop: r.next_hop,
+            })
+            .collect();
+        routes.sort_by(|a, b| {
+            a.destination
+                .cmp(&b.destination)
+                .then_with(|| a.next_hop.cmp(&b.next_hop))
+        });
+        Some(ZebraIp6 { route: routes })
+    } else {
+        None
+    };
+
     // Interfaces sorted deterministically by name
     let mut interfaces = Vec::new();
     let mut ospf_by_area: BTreeMap<String, Vec<ZebraOspfInterface>> = BTreeMap::new();
+    let mut ospf6_by_area: BTreeMap<String, Vec<ZebraOspfInterface>> = BTreeMap::new();
 
     // Sort device interfaces by name for deterministic ordering
     let mut sorted_interfaces = device.interfaces.clone();
@@ -192,10 +252,14 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         let ipv4 = iface.ipv4.as_ref().map(|prefix| ZebraInterfaceIpv4 {
             address: vec![prefix.to_string()],
         });
+        let ipv6 = iface.ipv6.as_ref().map(|prefix| ZebraInterfaceIpv6 {
+            address: vec![prefix.to_string()],
+        });
 
         interfaces.push(ZebraInterface {
             name: iface.name.clone(),
             ipv4,
+            ipv6,
         });
 
         // Collect OSPF interface participation if present
@@ -206,6 +270,24 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             };
 
             ospf_by_area
+                .entry(area_key)
+                .or_default()
+                .push(ZebraOspfInterface {
+                    name: iface.name.clone(),
+                    enabled: iface.enabled,
+                    cost: ospf_cfg.cost,
+                    passive: ospf_cfg.passive,
+                });
+        }
+
+        // Collect OSPFv3 interface participation if present
+        if let Some(ref ospf_cfg) = iface.ospfv3 {
+            let area_key = match &ospf_cfg.area {
+                OspfAreaId::Number(n) => n.to_string(),
+                OspfAreaId::Ipv4(ip) => ip.to_string(),
+            };
+
+            ospf6_by_area
                 .entry(area_key)
                 .or_default()
                 .push(ZebraOspfInterface {
@@ -287,6 +369,38 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         None
     };
 
+    // OSPFv3 configuration
+    let ospf6 = if let Some(ref ospf6_proc) = device.ospfv3 {
+        let mut areas = Vec::new();
+        for (area_id, mut ospf_ifaces) in ospf6_by_area {
+            ospf_ifaces.sort_by(|a, b| a.name.cmp(&b.name));
+            areas.push(ZebraOspfArea {
+                area_id,
+                interface: ospf_ifaces,
+            });
+        }
+
+        Some(ZebraOspf {
+            router_id: ospf6_proc.router_id,
+            area: areas,
+        })
+    } else if !ospf6_by_area.is_empty() {
+        let mut areas = Vec::new();
+        for (area_id, mut ospf_ifaces) in ospf6_by_area {
+            ospf_ifaces.sort_by(|a, b| a.name.cmp(&b.name));
+            areas.push(ZebraOspfArea {
+                area_id,
+                interface: ospf_ifaces,
+            });
+        }
+
+        Some(ZebraOspf {
+            router_id: None,
+            area: areas,
+        })
+    } else {
+        None
+    };
     // BGP configuration
     let bgp = if let Some(ref bgp_proc) = device.bgp {
         let mut neighbors: Vec<ZebraBgpNeighbor> = bgp_proc
@@ -302,18 +416,34 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         let mut networks: Vec<String> = bgp_proc.networks.iter().map(|p| p.to_string()).collect();
         networks.sort();
 
+        let mut neighbors_v6: Vec<ZebraBgpNeighborV6> = bgp_proc
+            .neighbors_v6
+            .iter()
+            .map(|n| ZebraBgpNeighborV6 {
+                peer_address: n.remote_address,
+                remote_as: n.remote_as,
+            })
+            .collect();
+        neighbors_v6.sort_by_key(|a| a.peer_address);
+
+        let mut networks_v6: Vec<String> =
+            bgp_proc.networks_v6.iter().map(|p| p.to_string()).collect();
+        networks_v6.sort();
+
         Some(ZebraBgp {
             as_number: bgp_proc.as_number,
             router_id: bgp_proc.router_id,
             neighbor: neighbors,
             network: networks,
+            neighbor_v6: neighbors_v6,
+            network_v6: networks_v6,
         })
     } else {
         None
     };
 
-    let router = if ospf.is_some() || bgp.is_some() {
-        Some(ZebraRouter { ospf, bgp })
+    let router = if ospf.is_some() || ospf6.is_some() || bgp.is_some() {
+        Some(ZebraRouter { ospf, ospf6, bgp })
     } else {
         None
     };
@@ -325,6 +455,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         ZebraConfig {
             system,
             ip,
+            ip6,
             interface: interfaces,
             router,
         },

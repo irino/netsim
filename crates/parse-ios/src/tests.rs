@@ -451,3 +451,55 @@ ip prefix-list FILTER-BGP seq 20 deny 0.0.0.0/0 le 32
     assert_eq!(json_val["hostname"], expected["hostname"]);
     assert_eq!(json_val["prefix-lists"], expected["prefix-lists"]);
 }
+
+#[test]
+fn test_cisco_ios_ipv6_parsing() {
+    let input = "hostname r1-v6\n!\ninterface GigabitEthernet0/0\n description IPv6 uplink\n ipv6 address 2001:db8:1::1/64\n ipv6 ospf 1 area 0\n no shutdown\n!\ninterface GigabitEthernet0/1\n ipv6 address 2001:db8:2::1/64\n ipv6 ospf 1 area 0.0.0.1\n shutdown\n!\nipv6 route 2001:db8:100::/48 2001:db8:1::2\n!\nipv6 router ospf 1\n router-id 1.1.1.1\n!\nrouter bgp 65001\n bgp router-id 1.1.1.1\n neighbor 2001:db8:1::2 remote-as 65002\n address-family ipv6 unicast\n  network 2001:db8:2::/64\n exit-address-family\n!\n";
+    let dev = parse_ios_config(input, Some("r1-v6.cfg"));
+    assert_eq!(dev.hostname, "r1-v6");
+    assert_eq!(dev.interfaces.len(), 2);
+
+    let if0 = &dev.interfaces[0];
+    assert_eq!(if0.name, "GigabitEthernet0/0");
+    assert_eq!(if0.ipv6.as_ref().unwrap().to_string(), "2001:db8:1::1/64");
+    assert!(if0.enabled);
+    assert!(if0.ospfv3.is_some());
+    assert_eq!(if0.ospfv3.as_ref().unwrap().area, ir::OspfAreaId::Number(0));
+
+    let if1 = &dev.interfaces[1];
+    assert_eq!(if1.name, "GigabitEthernet0/1");
+    assert_eq!(if1.ipv6.as_ref().unwrap().to_string(), "2001:db8:2::1/64");
+    assert!(!if1.enabled);
+    assert_eq!(
+        if1.ospfv3.as_ref().unwrap().area,
+        ir::OspfAreaId::Ipv4(Ipv4Addr::new(0, 0, 0, 1))
+    );
+
+    assert_eq!(dev.static_routes_v6.len(), 1);
+    assert_eq!(
+        dev.static_routes_v6[0].destination.to_string(),
+        "2001:db8:100::/48"
+    );
+    assert_eq!(
+        dev.static_routes_v6[0].next_hop.to_string(),
+        "2001:db8:1::2"
+    );
+
+    assert!(dev.ospfv3.is_some());
+    assert_eq!(dev.ospfv3.as_ref().unwrap().process_id, 1);
+    assert_eq!(
+        dev.ospfv3.as_ref().unwrap().router_id,
+        Some(Ipv4Addr::new(1, 1, 1, 1))
+    );
+
+    assert!(dev.bgp.is_some());
+    let bgp = dev.bgp.as_ref().unwrap();
+    assert_eq!(bgp.neighbors_v6.len(), 1);
+    assert_eq!(
+        bgp.neighbors_v6[0].remote_address.to_string(),
+        "2001:db8:1::2"
+    );
+    assert_eq!(bgp.neighbors_v6[0].remote_as, 65002);
+    assert_eq!(bgp.networks_v6.len(), 1);
+    assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
+}

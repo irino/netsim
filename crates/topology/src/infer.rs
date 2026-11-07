@@ -1,6 +1,36 @@
-use ir::{DeviceConfig, Ipv4Prefix};
+use ir::{DeviceConfig, Ipv4Prefix, Ipv6Prefix};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
+
+/// An IP subnet (IPv4 or IPv6 prefix).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum IpSubnet {
+    Ipv4(Ipv4Prefix),
+    Ipv6(Ipv6Prefix),
+}
+
+impl fmt::Display for IpSubnet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IpSubnet::Ipv4(p) => write!(f, "{}", p),
+            IpSubnet::Ipv6(p) => write!(f, "{}", p),
+        }
+    }
+}
+
+impl From<Ipv4Prefix> for IpSubnet {
+    fn from(p: Ipv4Prefix) -> Self {
+        IpSubnet::Ipv4(p)
+    }
+}
+
+impl From<Ipv6Prefix> for IpSubnet {
+    fn from(p: Ipv6Prefix) -> Self {
+        IpSubnet::Ipv6(p)
+    }
+}
 
 /// Endpoint of a point-to-point link.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -14,7 +44,7 @@ pub struct LinkEndpoint {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Link {
-    pub subnet: Ipv4Prefix,
+    pub subnet: IpSubnet,
     pub endpoint_a: LinkEndpoint,
     pub endpoint_b: LinkEndpoint,
 }
@@ -23,7 +53,7 @@ pub struct Link {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct TopologyWarning {
-    pub subnet: Ipv4Prefix,
+    pub subnet: IpSubnet,
     pub message: String,
 }
 
@@ -31,7 +61,7 @@ pub struct TopologyWarning {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct LanSegment {
-    pub subnet: Ipv4Prefix,
+    pub subnet: IpSubnet,
     pub endpoints: Vec<LinkEndpoint>,
 }
 
@@ -53,7 +83,7 @@ struct SubnetInterface {
 
 /// Infer network links and topology warnings from a list of device configurations.
 pub fn infer_topology(devices: &[DeviceConfig]) -> Topology {
-    let mut subnets: BTreeMap<Ipv4Prefix, Vec<SubnetInterface>> = BTreeMap::new();
+    let mut subnets: BTreeMap<IpSubnet, Vec<SubnetInterface>> = BTreeMap::new();
 
     for device in devices {
         for iface in &device.interfaces {
@@ -61,26 +91,32 @@ pub fn infer_topology(devices: &[DeviceConfig]) -> Topology {
             if !iface.enabled {
                 continue;
             }
-            let ipv4 = match &iface.ipv4 {
-                Some(ip) => ip,
-                None => continue,
-            };
-
             // Rule 6: Do not infer links between loopback interfaces
             if iface.is_loopback() {
                 continue;
             }
 
-            // Rule 1: Calculate network prefix
-            let net_prefix = ipv4.network_prefix();
+            if let Some(ref ipv4) = iface.ipv4 {
+                let net_prefix = IpSubnet::Ipv4(ipv4.network_prefix());
+                subnets
+                    .entry(net_prefix)
+                    .or_default()
+                    .push(SubnetInterface {
+                        hostname: device.hostname.clone(),
+                        interface_name: iface.name.clone(),
+                    });
+            }
 
-            subnets
-                .entry(net_prefix)
-                .or_default()
-                .push(SubnetInterface {
-                    hostname: device.hostname.clone(),
-                    interface_name: iface.name.clone(),
-                });
+            if let Some(ref ipv6) = iface.ipv6 {
+                let net_prefix = IpSubnet::Ipv6(ipv6.network_prefix());
+                subnets
+                    .entry(net_prefix)
+                    .or_default()
+                    .push(SubnetInterface {
+                        hostname: device.hostname.clone(),
+                        interface_name: iface.name.clone(),
+                    });
+            }
         }
     }
 
@@ -163,19 +199,49 @@ pub fn infer_topology(devices: &[DeviceConfig]) -> Topology {
         }
     }
 
-    // Rules 8 & 9: Ensure links, lan_segments, and warnings are sorted deterministically and deduplicated
-    links.sort();
-    links.dedup();
+    // Deduplicate dual-stack links connecting the exact same pair of interfaces:
+    // If a link between endpoint_a and endpoint_b already exists (e.g. from IPv4),
+    // retain the first one (IPv4 before IPv6 due to IpSubnet ordering)
+    let mut deduplicated_links: Vec<Link> = Vec::new();
+    let mut seen_endpoints = std::collections::BTreeSet::new();
 
-    lan_segments.sort();
-    lan_segments.dedup();
+    for link in links {
+        let ep_pair = (
+            link.endpoint_a.hostname.clone(),
+            link.endpoint_a.interface_name.clone(),
+            link.endpoint_b.hostname.clone(),
+            link.endpoint_b.interface_name.clone(),
+        );
+        if seen_endpoints.insert(ep_pair) {
+            deduplicated_links.push(link);
+        }
+    }
+
+    // Deduplicate LAN segments connecting the exact same set of endpoints
+    let mut deduplicated_lans: Vec<LanSegment> = Vec::new();
+    let mut seen_lan_endpoints = std::collections::BTreeSet::new();
+
+    for lan in lan_segments {
+        let eps: Vec<(String, String)> = lan
+            .endpoints
+            .iter()
+            .map(|e| (e.hostname.clone(), e.interface_name.clone()))
+            .collect();
+        if seen_lan_endpoints.insert(eps) {
+            deduplicated_lans.push(lan);
+        }
+    }
+
+    // Rules 8 & 9: Ensure links, lan_segments, and warnings are sorted deterministically and deduplicated
+    deduplicated_links.sort();
+    deduplicated_lans.sort();
 
     warnings.sort();
     warnings.dedup();
 
     Topology {
-        links,
-        lan_segments,
+        links: deduplicated_links,
+        lan_segments: deduplicated_lans,
         warnings,
     }
 }

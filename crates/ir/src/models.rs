@@ -1,6 +1,6 @@
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -13,6 +13,10 @@ pub enum IrError {
     InvalidIpv4Prefix(String),
     #[error("invalid prefix range: {0}")]
     InvalidPrefixRange(String),
+    #[error("invalid IPv6 prefix length {0}, must be between 0 and 128")]
+    InvalidIpv6PrefixLength(u8),
+    #[error("invalid IPv6 prefix format: '{0}'")]
+    InvalidIpv6Prefix(String),
 }
 
 /// Validated IPv4 prefix length (0..=32).
@@ -166,6 +170,159 @@ impl<'de> Deserialize<'de> for Ipv4Prefix {
     }
 }
 
+/// Validated IPv6 prefix length (0..=128).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ipv6PrefixLength(u8);
+
+impl Ipv6PrefixLength {
+    pub fn new(len: u8) -> Result<Self, IrError> {
+        if len <= 128 {
+            Ok(Self(len))
+        } else {
+            Err(IrError::InvalidIpv6PrefixLength(len))
+        }
+    }
+
+    pub fn value(&self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<u8> for Ipv6PrefixLength {
+    type Error = IrError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<Ipv6PrefixLength> for u8 {
+    fn from(prefix: Ipv6PrefixLength) -> Self {
+        prefix.0
+    }
+}
+
+impl fmt::Display for Ipv6PrefixLength {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Serialize for Ipv6PrefixLength {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Ipv6PrefixLength {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let len = u8::deserialize(deserializer)?;
+        Ipv6PrefixLength::new(len).map_err(de::Error::custom)
+    }
+}
+
+/// IPv6 address and prefix length pair.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Ipv6Prefix {
+    pub address: Ipv6Addr,
+    pub prefix_length: Ipv6PrefixLength,
+}
+
+impl Ipv6Prefix {
+    pub fn new(address: Ipv6Addr, prefix_length: Ipv6PrefixLength) -> Self {
+        Self {
+            address,
+            prefix_length,
+        }
+    }
+
+    /// Calculate the network address for this IPv6 prefix.
+    pub fn network_address(&self) -> Ipv6Addr {
+        let ip_u128 = u128::from(self.address);
+        let len = self.prefix_length.value();
+        let mask = if len == 0 {
+            0
+        } else if len >= 128 {
+            u128::MAX
+        } else {
+            !((1u128 << (128 - len)) - 1)
+        };
+        Ipv6Addr::from(ip_u128 & mask)
+    }
+
+    /// Returns the network prefix (network address + prefix length).
+    pub fn network_prefix(&self) -> Ipv6Prefix {
+        Ipv6Prefix {
+            address: self.network_address(),
+            prefix_length: self.prefix_length,
+        }
+    }
+}
+
+impl FromStr for Ipv6Prefix {
+    type Err = IrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() != 2 {
+            return Err(IrError::InvalidIpv6Prefix(s.to_string()));
+        }
+        let address = parts[0]
+            .parse::<Ipv6Addr>()
+            .map_err(|_| IrError::InvalidIpv6Prefix(s.to_string()))?;
+        let len = parts[1]
+            .parse::<u8>()
+            .map_err(|_| IrError::InvalidIpv6Prefix(s.to_string()))?;
+        let prefix_length = Ipv6PrefixLength::new(len)?;
+        Ok(Ipv6Prefix {
+            address,
+            prefix_length,
+        })
+    }
+}
+
+impl fmt::Display for Ipv6Prefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.address, self.prefix_length)
+    }
+}
+
+impl<'de> Deserialize<'de> for Ipv6Prefix {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct Ipv6PrefixFields {
+            address: Ipv6Addr,
+            prefix_length: Ipv6PrefixLength,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Ipv6PrefixHelper {
+            Str(String),
+            Obj(Ipv6PrefixFields),
+        }
+
+        match Ipv6PrefixHelper::deserialize(deserializer)? {
+            Ipv6PrefixHelper::Str(s) => s.parse::<Ipv6Prefix>().map_err(de::Error::custom),
+            Ipv6PrefixHelper::Obj(fields) => Ok(Ipv6Prefix {
+                address: fields.address,
+                prefix_length: fields.prefix_length,
+            }),
+        }
+    }
+}
+
 /// OSPF Area Identifier, representable as a 32-bit integer or an IPv4 dotted-quad address.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -206,7 +363,11 @@ pub struct Interface {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ipv4: Option<Ipv4Prefix>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<Ipv6Prefix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf: Option<InterfaceOspfConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ospfv3: Option<InterfaceOspfConfig>,
 }
 
 impl Interface {
@@ -232,6 +393,17 @@ pub struct OspfProcess {
     pub router_id: Option<Ipv4Addr>,
 }
 
+/// OSPFv3 process configuration aligned with ietf-routing / ietf-ospf.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Ospf6Process {
+    pub process_id: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub router_id: Option<Ipv4Addr>,
+}
+
+pub type OspfV3Process = Ospf6Process;
+
 /// Static IPv4 route configuration aligned with ietf-routing.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -240,11 +412,27 @@ pub struct StaticRoute {
     pub next_hop: Ipv4Addr,
 }
 
+/// Static IPv6 route configuration aligned with ietf-routing.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Ipv6StaticRoute {
+    pub destination: Ipv6Prefix,
+    pub next_hop: Ipv6Addr,
+}
+
 /// BGP neighbor peer configuration aligned with ietf-bgp.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct BgpNeighbor {
     pub remote_address: Ipv4Addr,
+    pub remote_as: u32,
+}
+
+/// BGP IPv6 neighbor peer configuration aligned with ietf-bgp.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpNeighborV6 {
+    pub remote_address: Ipv6Addr,
     pub remote_as: u32,
 }
 
@@ -259,6 +447,10 @@ pub struct BgpProcess {
     pub neighbors: Vec<BgpNeighbor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks: Vec<Ipv4Prefix>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbors_v6: Vec<BgpNeighborV6>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks_v6: Vec<Ipv6Prefix>,
 }
 
 /// Action for a routing policy or prefix-list entry.
@@ -379,9 +571,13 @@ pub struct DeviceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf: Option<OspfProcess>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ospfv3: Option<Ospf6Process>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bgp: Option<BgpProcess>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub static_routes: Vec<StaticRoute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub static_routes_v6: Vec<Ipv6StaticRoute>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prefix_lists: Vec<PrefixList>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

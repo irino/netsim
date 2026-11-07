@@ -1,10 +1,10 @@
 use ir::{
-    BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
-    OspfProcess, PolicyAction, PrefixLength, PrefixList, PrefixListEntry, PrefixRange, StaticRoute,
-    UnparsedLine,
+    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
+    Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
+    PrefixLength, PrefixList, PrefixListEntry, PrefixRange, StaticRoute, UnparsedLine,
 };
 use std::collections::{BTreeMap, HashSet};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use winnow::ascii::{space0, space1};
 use winnow::combinator::seq;
@@ -25,12 +25,20 @@ enum Context {
     Global,
     Interface(Interface),
     Ospf(u16, Option<Ipv4Addr>, Vec<ParsedOspfNetwork>),
+    Ospf6 {
+        proc_id: u16,
+        router_id: Option<Ipv4Addr>,
+        iface_areas: Vec<(String, OspfAreaId)>,
+    },
     Bgp {
         as_num: u32,
         router_id: Option<Ipv4Addr>,
         neighbors: Vec<BgpNeighbor>,
         networks: Vec<Ipv4Prefix>,
+        neighbors_v6: Vec<BgpNeighborV6>,
+        networks_v6: Vec<Ipv6Prefix>,
         in_af_ipv4: bool,
+        in_af_ipv6: bool,
     },
 }
 
@@ -59,6 +67,32 @@ fn matches_wildcard(ip: Ipv4Addr, network: Ipv4Addr, wildcard: Ipv4Addr) -> bool
     let wild_u32 = u32::from(wildcard);
 
     (ip_u32 & !wild_u32) == (net_u32 & !wild_u32)
+}
+
+fn parse_ipv6(input: &mut &str) -> PResult<Ipv6Addr> {
+    let checkpoint = *input;
+    let ip_str: &str =
+        take_while(1.., |c: char| c.is_ascii_hexdigit() || c == ':').parse_next(input)?;
+    match ip_str.parse::<Ipv6Addr>() {
+        Ok(ip) => Ok(ip),
+        Err(e) => {
+            *input = checkpoint;
+            Err(ErrMode::from_external_error(input, e))
+        }
+    }
+}
+
+fn parse_ipv6_prefix(input: &mut &str) -> PResult<Ipv6Prefix> {
+    let checkpoint = *input;
+    let prefix_str: &str = take_while(1.., |c: char| c.is_ascii_hexdigit() || c == ':' || c == '/')
+        .parse_next(input)?;
+    match prefix_str.parse::<Ipv6Prefix>() {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            *input = checkpoint;
+            Err(ErrMode::from_external_error(input, e))
+        }
+    }
 }
 
 fn parse_ipv4(input: &mut &str) -> PResult<Ipv4Addr> {
@@ -112,8 +146,11 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut interfaces = Vec::new();
     let mut ospf_process: Option<OspfProcess> = None;
     let mut ospf_networks: Vec<ParsedOspfNetwork> = Vec::new();
+    let mut ospfv3_process: Option<Ospf6Process> = None;
+    let mut ospfv3_iface_areas: Vec<(String, OspfAreaId)> = Vec::new();
     let mut bgp_process: Option<BgpProcess> = None;
     let mut static_routes = Vec::new();
+    let mut static_routes_v6 = Vec::new();
     let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
     let mut prefix_list_seq_sets: BTreeMap<String, HashSet<u32>> = BTreeMap::new();
     let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
@@ -140,11 +177,24 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                     ospf_networks.append(&mut nets);
                 }
+                Context::Ospf6 {
+                    proc_id,
+                    router_id,
+                    mut iface_areas,
+                } => {
+                    ospfv3_process = Some(Ospf6Process {
+                        process_id: proc_id,
+                        router_id,
+                    });
+                    ospfv3_iface_areas.append(&mut iface_areas);
+                }
                 Context::Bgp {
                     as_num,
                     router_id,
                     neighbors,
                     networks,
+                    neighbors_v6,
+                    networks_v6,
                     ..
                 } => {
                     bgp_process = Some(BgpProcess {
@@ -152,6 +202,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         router_id,
                         neighbors,
                         networks,
+                        neighbors_v6,
+                        networks_v6,
                     });
                 }
                 Context::Global => {}
@@ -161,6 +213,18 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
 
         if line == "exit" || line == "end" {
+            if let Context::Bgp {
+                ref mut in_af_ipv6,
+                ref mut in_af_ipv4,
+                ..
+            } = ctx
+            {
+                if *in_af_ipv6 || *in_af_ipv4 {
+                    *in_af_ipv6 = false;
+                    *in_af_ipv4 = false;
+                    continue;
+                }
+            }
             match ctx {
                 Context::Interface(iface) => interfaces.push(iface),
                 Context::Ospf(proc_id, router_id, mut nets) => {
@@ -170,11 +234,24 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                     ospf_networks.append(&mut nets);
                 }
+                Context::Ospf6 {
+                    proc_id,
+                    router_id,
+                    mut iface_areas,
+                } => {
+                    ospfv3_process = Some(Ospf6Process {
+                        process_id: proc_id,
+                        router_id,
+                    });
+                    ospfv3_iface_areas.append(&mut iface_areas);
+                }
                 Context::Bgp {
                     as_num,
                     router_id,
                     neighbors,
                     networks,
+                    neighbors_v6,
+                    networks_v6,
                     ..
                 } => {
                     bgp_process = Some(BgpProcess {
@@ -182,6 +259,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         router_id,
                         neighbors,
                         networks,
+                        neighbors_v6,
+                        networks_v6,
                     });
                 }
                 Context::Global => {}
@@ -196,7 +275,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 Context::Interface(_) => {
                     line.starts_with("description ")
                         || line.starts_with("ip address ")
+                        || line.starts_with("ipv6 address ")
                         || line.starts_with("ip ospf ")
+                        || line.starts_with("ipv6 ospf6 ")
                         || line == "shutdown"
                         || line == "no shutdown"
                 }
@@ -205,6 +286,11 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         || line.starts_with("router-id ")
                         || line.starts_with("network ")
                         || line.starts_with("passive-interface ")
+                }
+                Context::Ospf6 { .. } => {
+                    line.starts_with("ospf6 router-id ")
+                        || line.starts_with("router-id ")
+                        || line.starts_with("interface ")
                 }
                 Context::Bgp { .. } => {
                     line.starts_with("bgp router-id ")
@@ -226,11 +312,24 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         });
                         ospf_networks.append(&mut nets);
                     }
+                    Context::Ospf6 {
+                        proc_id,
+                        router_id,
+                        mut iface_areas,
+                    } => {
+                        ospfv3_process = Some(Ospf6Process {
+                            process_id: proc_id,
+                            router_id,
+                        });
+                        ospfv3_iface_areas.append(&mut iface_areas);
+                    }
                     Context::Bgp {
                         as_num,
                         router_id,
                         neighbors,
                         networks,
+                        neighbors_v6,
+                        networks_v6,
                         ..
                     } => {
                         bgp_process = Some(BgpProcess {
@@ -238,6 +337,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             router_id,
                             neighbors,
                             networks,
+                            neighbors_v6,
+                            networks_v6,
                         });
                     }
                     Context::Global => {}
@@ -272,7 +373,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             description: None,
                             enabled: true,
                             ipv4: None,
+                            ipv6: None,
                             ospf: None,
+                            ospfv3: None,
                         });
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -282,6 +385,12 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             reason: "malformed interface statement".to_string(),
                         });
                     }
+                } else if line.starts_with("router ospf6") {
+                    ctx = Context::Ospf6 {
+                        proc_id: 1,
+                        router_id: None,
+                        iface_areas: Vec::new(),
+                    };
                 } else if line.starts_with("router ospf") {
                     let mut s = line;
                     let parsed_pid: PResult<(&str, &str, &str)> =
@@ -310,7 +419,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 router_id: None,
                                 neighbors: Vec::new(),
                                 networks: Vec::new(),
+                                neighbors_v6: Vec::new(),
+                                networks_v6: Vec::new(),
                                 in_af_ipv4: false,
+                                in_af_ipv6: false,
                             };
                         } else {
                             unparsed_lines.push(UnparsedLine {
@@ -326,6 +438,38 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             line_number: line_num,
                             content: line.to_string(),
                             reason: "malformed router bgp command".to_string(),
+                        });
+                    }
+                } else if let Some(stripped) = line.strip_prefix("ipv6 route ") {
+                    let tail = stripped.trim();
+                    let tokens: Vec<&str> = tail.split_whitespace().collect();
+                    if tokens.len() >= 2 {
+                        let mut s_dest = tokens[0];
+                        let mut s_nh = tokens[1];
+                        let dest_res = parse_ipv6_prefix.parse_next(&mut s_dest);
+                        let nh_res = parse_ipv6.parse_next(&mut s_nh);
+                        match (dest_res, nh_res) {
+                            (Ok(dest), Ok(next_hop)) => {
+                                static_routes_v6.push(Ipv6StaticRoute {
+                                    destination: dest,
+                                    next_hop,
+                                });
+                            }
+                            _ => {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "malformed ipv6 route command".to_string(),
+                                });
+                            }
+                        }
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed ipv6 route command".to_string(),
                         });
                     }
                 } else if let Some(stripped) = line.strip_prefix("ip route ") {
@@ -697,6 +841,40 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             reason: "malformed ip address command".to_string(),
                         });
                     }
+                } else if let Some(stripped) = line.strip_prefix("ipv6 address ") {
+                    let mut s = stripped.trim();
+                    match parse_ipv6_prefix.parse_next(&mut s) {
+                        Ok(prefix) => {
+                            iface.ipv6 = Some(prefix);
+                        }
+                        Err(_) => {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "invalid IPv6 address format".to_string(),
+                            });
+                        }
+                    }
+                } else if let Some(stripped) = line.strip_prefix("ipv6 ospf6 area ") {
+                    let mut s = stripped.trim();
+                    match parse_ospf_area.parse_next(&mut s) {
+                        Ok(area) => {
+                            iface.ospfv3 = Some(InterfaceOspfConfig {
+                                area,
+                                cost: None,
+                                passive: None,
+                            });
+                        }
+                        Err(_) => {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed ipv6 ospf6 area command".to_string(),
+                            });
+                        }
+                    }
                 } else if let Some(stripped) = line.strip_prefix("ip ospf area ") {
                     let mut s = stripped.trim();
                     match parse_ospf_area.parse_next(&mut s) {
@@ -758,6 +936,45 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         line_number: line_num,
                         content: line.to_string(),
                         reason: "unsupported interface command".to_string(),
+                    });
+                }
+            }
+            Context::Ospf6 {
+                ref mut router_id,
+                ref mut iface_areas,
+                ..
+            } => {
+                if let Some(stripped) = line
+                    .strip_prefix("ospf6 router-id ")
+                    .or_else(|| line.strip_prefix("router-id "))
+                {
+                    let mut s = stripped.trim();
+                    let parsed_rid: PResult<Ipv4Addr> = parse_ipv4.parse_next(&mut s);
+                    if let Ok(rid) = parsed_rid {
+                        *router_id = Some(rid);
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed ospf6 router-id command".to_string(),
+                        });
+                    }
+                } else if let Some(stripped) = line.strip_prefix("interface ") {
+                    // interface <name> area <area>
+                    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+                    if tokens.len() >= 3 && tokens[1] == "area" {
+                        let mut s_area = tokens[2];
+                        if let Ok(area) = parse_ospf_area.parse_next(&mut s_area) {
+                            iface_areas.push((tokens[0].to_string(), area));
+                        }
+                    }
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "unsupported OSPF6 command".to_string(),
                     });
                 }
             }
@@ -855,7 +1072,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 ref mut router_id,
                 ref mut neighbors,
                 ref mut networks,
+                ref mut neighbors_v6,
+                ref mut networks_v6,
                 ref mut in_af_ipv4,
+                ref mut in_af_ipv6,
                 ..
             } => {
                 if let Some(stripped) = line
@@ -876,8 +1096,13 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     }
                 } else if line.starts_with("address-family ipv4") {
                     *in_af_ipv4 = true;
+                    *in_af_ipv6 = false;
+                } else if line.starts_with("address-family ipv6") {
+                    *in_af_ipv6 = true;
+                    *in_af_ipv4 = false;
                 } else if line == "exit-address-family" {
                     *in_af_ipv4 = false;
+                    *in_af_ipv6 = false;
                 } else if line.starts_with("neighbor ") && line.contains(" remote-as ") {
                     let mut s = line;
                     let parsed_nbr: PResult<(&str, &str, Ipv4Addr, &str, &str, &str, &str)> = seq!(
@@ -906,66 +1131,112 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             });
                         }
                     } else {
-                        unparsed_lines.push(UnparsedLine {
-                            file_path: filename.map(String::from),
-                            line_number: line_num,
-                            content: line.to_string(),
-                            reason: "malformed neighbor remote-as command".to_string(),
-                        });
+                        let mut s_v6 = line;
+                        let parsed_nbr_v6: PResult<(&str, &str, Ipv6Addr, &str, &str, &str, &str)> =
+                            seq!(
+                                "neighbor",
+                                space1,
+                                parse_ipv6,
+                                space1,
+                                "remote-as",
+                                space1,
+                                rest
+                            )
+                            .parse_next(&mut s_v6);
+
+                        if let Ok((_, _, nbr_ip_v6, _, _, _, rem_as_str)) = parsed_nbr_v6 {
+                            if let Ok(rem_as) = rem_as_str.trim().parse::<u32>() {
+                                neighbors_v6.push(BgpNeighborV6 {
+                                    remote_address: nbr_ip_v6,
+                                    remote_as: rem_as,
+                                });
+                            } else {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "invalid neighbor remote-as".to_string(),
+                                });
+                            }
+                        } else {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed neighbor remote-as command".to_string(),
+                            });
+                        }
                     }
                 } else if let Some(stripped) = line.strip_prefix("network ") {
-                    let tail = stripped.trim();
-                    let tokens: Vec<&str> = tail.split_whitespace().collect();
-                    if tokens.len() == 1 {
-                        let mut s = tokens[0];
-                        match parse_ipv4_prefix.parse_next(&mut s) {
+                    if *in_af_ipv6 {
+                        let mut s = stripped.trim();
+                        match parse_ipv6_prefix.parse_next(&mut s) {
                             Ok(prefix) => {
-                                networks.push(prefix);
+                                networks_v6.push(prefix);
                             }
                             Err(_) => {
                                 unparsed_lines.push(UnparsedLine {
                                     file_path: filename.map(String::from),
                                     line_number: line_num,
                                     content: line.to_string(),
-                                    reason: "invalid BGP network prefix".to_string(),
-                                });
-                            }
-                        }
-                    } else if tokens.len() >= 3 && tokens[1] == "mask" {
-                        let mut s_ip = tokens[0];
-                        let mut s_mask = tokens[2];
-                        let ip_res = parse_ipv4.parse_next(&mut s_ip);
-                        let mask_res = parse_ipv4.parse_next(&mut s_mask);
-                        match (ip_res, mask_res) {
-                            (Ok(ip), Ok(mask)) => match mask_to_prefix_length(mask) {
-                                Ok(prefix_len) => {
-                                    networks.push(Ipv4Prefix::new(ip, prefix_len));
-                                }
-                                Err(reason) => {
-                                    unparsed_lines.push(UnparsedLine {
-                                        file_path: filename.map(String::from),
-                                        line_number: line_num,
-                                        content: line.to_string(),
-                                        reason: format!("invalid BGP network mask: {}", reason),
-                                    });
-                                }
-                            },
-                            _ => {
-                                unparsed_lines.push(UnparsedLine {
-                                    file_path: filename.map(String::from),
-                                    line_number: line_num,
-                                    content: line.to_string(),
-                                    reason: "malformed BGP network command".to_string(),
+                                    reason: "invalid BGP IPv6 network prefix".to_string(),
                                 });
                             }
                         }
                     } else {
-                        unparsed_lines.push(UnparsedLine {
-                            file_path: filename.map(String::from),
-                            line_number: line_num,
-                            content: line.to_string(),
-                            reason: "malformed BGP network command".to_string(),
-                        });
+                        let tail = stripped.trim();
+                        let tokens: Vec<&str> = tail.split_whitespace().collect();
+                        if tokens.len() == 1 {
+                            let mut s = tokens[0];
+                            match parse_ipv4_prefix.parse_next(&mut s) {
+                                Ok(prefix) => {
+                                    networks.push(prefix);
+                                }
+                                Err(_) => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "invalid BGP network prefix".to_string(),
+                                    });
+                                }
+                            }
+                        } else if tokens.len() >= 3 && tokens[1] == "mask" {
+                            let mut s_ip = tokens[0];
+                            let mut s_mask = tokens[2];
+                            let ip_res = parse_ipv4.parse_next(&mut s_ip);
+                            let mask_res = parse_ipv4.parse_next(&mut s_mask);
+                            match (ip_res, mask_res) {
+                                (Ok(ip), Ok(mask)) => match mask_to_prefix_length(mask) {
+                                    Ok(prefix_len) => {
+                                        networks.push(Ipv4Prefix::new(ip, prefix_len));
+                                    }
+                                    Err(reason) => {
+                                        unparsed_lines.push(UnparsedLine {
+                                            file_path: filename.map(String::from),
+                                            line_number: line_num,
+                                            content: line.to_string(),
+                                            reason: format!("invalid BGP network mask: {}", reason),
+                                        });
+                                    }
+                                },
+                                _ => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "malformed BGP network command".to_string(),
+                                    });
+                                }
+                            }
+                        } else {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed BGP network command".to_string(),
+                            });
+                        }
                     }
                 } else {
                     unparsed_lines.push(UnparsedLine {
@@ -988,11 +1259,24 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             });
             ospf_networks.append(&mut nets);
         }
+        Context::Ospf6 {
+            proc_id,
+            router_id,
+            mut iface_areas,
+        } => {
+            ospfv3_process = Some(Ospf6Process {
+                process_id: proc_id,
+                router_id,
+            });
+            ospfv3_iface_areas.append(&mut iface_areas);
+        }
         Context::Bgp {
             as_num,
             router_id,
             neighbors,
             networks,
+            neighbors_v6,
+            networks_v6,
             ..
         } => {
             bgp_process = Some(BgpProcess {
@@ -1000,6 +1284,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 router_id,
                 neighbors,
                 networks,
+                neighbors_v6,
+                networks_v6,
             });
         }
         Context::Global => {}
@@ -1032,8 +1318,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         hostname,
         interfaces,
         ospf: ospf_process,
+        ospfv3: ospfv3_process,
         bgp: bgp_process,
         static_routes,
+        static_routes_v6,
         prefix_lists,
         unparsed_lines,
     }
