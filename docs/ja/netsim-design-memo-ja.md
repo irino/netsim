@@ -188,3 +188,55 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
 - zebra-rs は AGPLv3。個人利用は問題ないが、成果物を公開・配布する場合はライセンス条件を確認すること（自前コードは zebra-rs 本体とは独立だが、リンク形態による）。
 - 実務コンフィグを外部のクラウドエージェント（Jules等）に読ませる場合は、会社のコンフィグそのものではなく匿名化したサンプルを使うこと。パーサー開発にはサンプルで十分。
 - interface 名の対応（ベンダー表記 ↔ clab の ethN）は生成時に固定表を作り、zebra.yaml 側のインターフェース指定と一致させること。ここがずれると隣接が上がらず原因が分かりにくい。
+
+---
+
+## 11. 今後の開発ロードマップ（Future Iterations）
+
+### Phase 1: ルーティングポリシーと Route Map / Policy Statement（最優先課題）
+現在、複数のベンダーパーサーでプレフィックスリストが IR にパースされていますが、zebra-rs 側のルーティングポリシースキーマ統合が保留されているため `emit-zebra` は `EmitWarning` を出力しています。
+
+- **ルーティングポリシー IR と IPv6 プレフィックスリスト**:
+  - `ietf-routing-policy` (RFC 9067) に準拠した `PolicyDefinition` / `RouteMap` を `crates/ir` にモデリング。
+  - `PrefixList` の IPv6 対応拡張（Cisco IOS、Arista EOS、FRR の `ipv6 prefix-list`、および Junos `inet6` 配下の `prefix-list`）。
+- **ベンダー別ポリシーパーサー**:
+  - Cisco IOS / Arista EOS / FRR: `route-map <NAME> {permit|deny} <SEQ>`（`match ip address prefix-list`, `set metric`, `set local-preference` 等）。
+  - Cisco IOS XR: `route-policy <NAME>`（RPL 言語）。
+  - Junos: `policy-options policy-statement <NAME> term <TERM>`（`from prefix-list`, `then accept/reject` 等）。
+- **zebra-rs ポリシーエミッタ**:
+  - IR のルーティングポリシーを zebra-rs のトップレベル `prefix-set` および `policy` YAML 構造へとマッピング。
+
+### Phase 2: 自動ラボデプロイと収束検証（`netsim verify`）
+現在、`netsim gen-lab` は各種成果物を生成しますが、Containerlab でのデプロイや収束確認には手動での CLI コマンド実行が必要です。
+
+- **自動エミュレーションランナー**:
+  - サブコマンドの追加（例: `netsim verify --lab-dir ./lab/` または `netsim test`）:
+    - `containerlab deploy -t topology.clab.yml` を実行。
+    - 各ルーティングプロトコルが収束するかタイムアウトするまで、Docker/コンテナ exec 経由で `vtyctl show ip route` / `vtyctl show ipv6 route` をポーリング。
+    - 推論されたデバイスの Loopback 間（IPv4 & IPv6 双方向）でデータプレーン ping テストを実行。
+    - 完了後に自動で `containerlab destroy` を実行。
+- **到達性マトリクスとインテント表明**:
+  - ユーザーが `intent.yml`（例: `assert: ping r1 -> r5 loopback`）を指定できるようにし、ネットワークエミュレーションが運用上の意図（インテント）を満たしているかを自動検証。
+
+### Phase 3: IS-IS プロトコルと高度なルーティング機能
+- **IS-IS ルーティングプロトコル**:
+  - 多くのサービスプロバイダや現代のデータセンター網では、OSPF に代わり IS-IS が IGP として採用されています。
+  - `crates/ir` への IS-IS モデル追加（`IsisProcess`, Level-1/Level-2, NET / ISO system ID, インターフェースメトリック）。
+  - ベンダーパーサーおよび zebra-rs YAML エミッタの IS-IS 拡張。
+- **高度な BGP 機能拡張**:
+  - BGP ルートリフレクタ（`neighbor ... route-reflector-client`）。
+  - BGP コミュニティ / 拡張コミュニティ（`send-community`, `community-list`）。
+  - 大規模設定のパースを容易にする BGP Peer Group / Template。
+  - `ietf-bfd` に準拠した BFD (Bidirectional Forwarding Detection) 統合。
+
+### Phase 4: マルチエンジンとハイブリッド検証バックエンド
+- **代替ランタイムエンジンエミッタ**:
+  - zebra-rs を第一のターゲットとしつつ、`emit-frr` バックエンドを追加することで、zebra-rs で未実装の機能を上流の FRR コンテナイメージを用いてエミュレーションラボで実行可能にする。
+- **静的解析＋エミュレーションのハイブリッド検証**:
+  - Containerlab のデプロイ前に、高速な静的数理到達性検査を実行（例: Batfish のベンダー非依存フォーマットへの出力、または軽量な到達性グラフソルバーの統合）。
+
+### Phase 5: オーバーレイネットワークと最新ファブリック（EVPN / SRv6）
+- **VXLAN / EVPN L2/L3 ファブリック**:
+  - VTEP / NVE インターフェースおよび BGP EVPN (AFI 25 / SAFI 70) のパースとモデリング。
+- **Segment Routing (SRv6 / SR-MPLS)**:
+  - zebra-rs の主要な強みである SRv6 micro-segment (uSID) およびプログラマブルデータプレーンとの連携。
