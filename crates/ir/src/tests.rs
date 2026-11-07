@@ -1,4 +1,48 @@
 use super::*;
+use std::net::Ipv6Addr;
+
+#[test]
+fn test_ipv6_prefix_length_valid() {
+    assert_eq!(Ipv6PrefixLength::new(0).unwrap().value(), 0);
+    assert_eq!(Ipv6PrefixLength::new(64).unwrap().value(), 64);
+    assert_eq!(Ipv6PrefixLength::new(128).unwrap().value(), 128);
+}
+
+#[test]
+fn test_ipv6_prefix_length_invalid() {
+    let err = Ipv6PrefixLength::new(129).unwrap_err();
+    assert_eq!(err, IrError::InvalidIpv6PrefixLength(129));
+}
+
+#[test]
+fn test_ipv6_prefix_parsing_and_network_address() {
+    let prefix: Ipv6Prefix = "2001:db8:abcd:0012::1/64".parse().unwrap();
+    assert_eq!(
+        prefix.address,
+        "2001:db8:abcd:12::1".parse::<Ipv6Addr>().unwrap()
+    );
+    assert_eq!(prefix.prefix_length.value(), 64);
+    assert_eq!(
+        prefix.network_address(),
+        "2001:db8:abcd:12::".parse::<Ipv6Addr>().unwrap()
+    );
+    assert_eq!(prefix.network_prefix().to_string(), "2001:db8:abcd:12::/64");
+
+    let host_prefix: Ipv6Prefix = "2001:db8::1/128".parse().unwrap();
+    assert_eq!(
+        host_prefix.network_address(),
+        "2001:db8::1".parse::<Ipv6Addr>().unwrap()
+    );
+
+    let default_prefix: Ipv6Prefix = "::/0".parse().unwrap();
+    assert_eq!(
+        default_prefix.network_address(),
+        "::".parse::<Ipv6Addr>().unwrap()
+    );
+
+    assert!("2001:db8::1/129".parse::<Ipv6Prefix>().is_err());
+    assert!("invalid_ipv6".parse::<Ipv6Prefix>().is_err());
+}
 
 #[test]
 fn test_prefix_length_valid() {
@@ -36,13 +80,23 @@ fn test_serde_serialization_deserialization() {
             description: Some("Test interface".to_string()),
             enabled: true,
             ipv4: Some("10.0.0.1/24".parse().unwrap()),
+            ipv6: Some("2001:db8:1::1/64".parse().unwrap()),
             ospf: Some(InterfaceOspfConfig {
+                area: OspfAreaId::Number(0),
+                cost: Some(10),
+                passive: Some(false),
+            }),
+            ospfv3: Some(InterfaceOspfConfig {
                 area: OspfAreaId::Number(0),
                 cost: Some(10),
                 passive: Some(false),
             }),
         }],
         ospf: Some(OspfProcess {
+            process_id: 1,
+            router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
+        }),
+        ospfv3: Some(Ospf6Process {
             process_id: 1,
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
         }),
@@ -54,10 +108,19 @@ fn test_serde_serialization_deserialization() {
                 remote_as: 65002,
             }],
             networks: vec!["10.0.0.0/24".parse().unwrap()],
+            neighbors_v6: vec![BgpNeighborV6 {
+                remote_address: "2001:db8:1::2".parse().unwrap(),
+                remote_as: 65002,
+            }],
+            networks_v6: vec!["2001:db8:1::/64".parse().unwrap()],
         }),
         static_routes: vec![StaticRoute {
             destination: "192.168.0.0/16".parse().unwrap(),
             next_hop: std::net::Ipv4Addr::new(10, 0, 0, 2),
+        }],
+        static_routes_v6: vec![Ipv6StaticRoute {
+            destination: "2001:db8:2::/64".parse().unwrap(),
+            next_hop: "2001:db8:1::2".parse().unwrap(),
         }],
         prefix_lists: vec![PrefixList {
             name: "FILTER-BGP".to_string(),
@@ -156,8 +219,10 @@ fn test_prefix_list_serialization_shape() {
         hostname: "R1".to_string(),
         interfaces: vec![],
         ospf: None,
+        ospfv3: None,
         bgp: None,
         static_routes: vec![],
+        static_routes_v6: vec![],
         prefix_lists: vec![PrefixList {
             name: "FILTER-BGP".to_string(),
             entries: vec![

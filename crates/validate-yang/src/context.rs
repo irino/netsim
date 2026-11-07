@@ -77,6 +77,7 @@ pub fn create_yang_context() -> Context {
     load_module(&mut ctx, "ietf-ip");
     load_module(&mut ctx, "ietf-routing");
     load_module(&mut ctx, "ietf-ipv4-unicast-routing");
+    load_module(&mut ctx, "ietf-ipv6-unicast-routing");
     load_module(&mut ctx, "ietf-ospf");
     load_module(&mut ctx, "ietf-bgp");
     load_module(&mut ctx, "ietf-routing-policy");

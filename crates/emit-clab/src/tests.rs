@@ -12,12 +12,16 @@ fn make_device(name: &str, ifaces: &[(&str, Option<&str>, bool)]) -> DeviceConfi
                 description: None,
                 enabled: *enabled,
                 ipv4: ip.map(|s| s.parse::<Ipv4Prefix>().unwrap()),
+                ipv6: None,
                 ospf: None,
+                ospfv3: None,
             })
             .collect(),
         ospf: None,
+        ospfv3: None,
         bgp: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }

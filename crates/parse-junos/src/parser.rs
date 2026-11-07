@@ -1,15 +1,42 @@
 use ir::{
-    BgpNeighbor, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig, Ipv4Prefix, OspfAreaId,
-    OspfProcess, PolicyAction, PrefixList, PrefixListEntry, StaticRoute, UnparsedLine,
+    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
+    Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
+    PrefixList, PrefixListEntry, StaticRoute, UnparsedLine,
 };
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use winnow::ascii::{space0, space1};
 use winnow::combinator::seq;
 use winnow::error::{ErrMode, FromExternalError};
 use winnow::token::{rest, take_while};
 use winnow::ModalResult as PResult;
 use winnow::Parser;
+
+fn parse_ipv6(input: &mut &str) -> PResult<Ipv6Addr> {
+    let checkpoint = *input;
+    let ip_str: &str =
+        take_while(1.., |c: char| c.is_ascii_hexdigit() || c == ':').parse_next(input)?;
+    match ip_str.parse::<Ipv6Addr>() {
+        Ok(ip) => Ok(ip),
+        Err(e) => {
+            *input = checkpoint;
+            Err(ErrMode::from_external_error(input, e))
+        }
+    }
+}
+
+fn parse_ipv6_prefix(input: &mut &str) -> PResult<Ipv6Prefix> {
+    let checkpoint = *input;
+    let prefix_str: &str = take_while(1.., |c: char| c.is_ascii_hexdigit() || c == ':' || c == '/')
+        .parse_next(input)?;
+    match prefix_str.parse::<Ipv6Prefix>() {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            *input = checkpoint;
+            Err(ErrMode::from_external_error(input, e))
+        }
+    }
+}
 
 fn parse_ipv4(input: &mut &str) -> PResult<Ipv4Addr> {
     let checkpoint = *input;
@@ -61,6 +88,7 @@ struct RawInterface {
     description: Option<String>,
     disable: bool,
     ipv4: Option<Ipv4Prefix>,
+    ipv6: Option<Ipv6Prefix>,
 }
 
 #[derive(Default, Debug)]
@@ -80,15 +108,21 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut interfaces_map: BTreeMap<String, RawInterface> = BTreeMap::new();
     let mut ospf_router_id: Option<Ipv4Addr> = None;
     let mut ospf_areas: BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>> = BTreeMap::new();
+    let mut ospfv3_areas: BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>> =
+        BTreeMap::new();
     let mut has_ospf = false;
+    let mut has_ospfv3 = false;
 
     let mut bgp_as: Option<u32> = None;
     let mut bgp_router_id: Option<Ipv4Addr> = None;
     let mut bgp_neighbors: BTreeMap<Ipv4Addr, RawBgpNeighbor> = BTreeMap::new();
+    let mut bgp_neighbors_v6: BTreeMap<Ipv6Addr, RawBgpNeighbor> = BTreeMap::new();
     let mut bgp_networks: Vec<Ipv4Prefix> = Vec::new();
+    let mut bgp_networks_v6: Vec<Ipv6Prefix> = Vec::new();
     let mut has_bgp = false;
 
     let mut static_routes = Vec::new();
+    let mut static_routes_v6 = Vec::new();
     let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
     let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
     let mut unparsed_lines = Vec::new();
@@ -171,6 +205,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             description: None,
                             disable: false,
                             ipv4: None,
+                            ipv6: None,
                         });
 
                 let sub_tokens = &tokens[3..];
@@ -209,6 +244,26 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             });
                         }
                     }
+                } else if sub_tokens.len() >= 4
+                    && sub_tokens[0] == "family"
+                    && sub_tokens[1] == "inet6"
+                    && sub_tokens[2] == "address"
+                {
+                    let addr_str = sub_tokens[3];
+                    let mut s = addr_str;
+                    match parse_ipv6_prefix.parse_next(&mut s) {
+                        Ok(prefix) => {
+                            entry.ipv6 = Some(prefix);
+                        }
+                        Err(_) => {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "invalid IPv6 address/prefix".to_string(),
+                            });
+                        }
+                    }
                 } else {
                     unparsed_lines.push(UnparsedLine {
                         file_path: filename.map(String::from),
@@ -232,6 +287,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         description: None,
                         disable: false,
                         ipv4: None,
+                        ipv6: None,
                     });
                 entry.description = Some(desc.trim_matches('"').to_string());
             } else if tokens.len() == 2 && tokens[1] == "disable" {
@@ -242,6 +298,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         description: None,
                         disable: false,
                         ipv4: None,
+                        ipv6: None,
                     });
                 entry.disable = true;
             } else {
@@ -321,12 +378,127 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         reason: "malformed static route statement".to_string(),
                     });
                 }
+            } else if let Some(stripped_rib) = rest_ro.strip_prefix("rib inet6.0 static route ") {
+                let rest_sr = stripped_rib.trim();
+                let tokens: Vec<&str> = rest_sr.split_whitespace().collect();
+                if tokens.len() >= 3 && tokens[1] == "next-hop" {
+                    let mut s_dest = tokens[0];
+                    let mut s_nh = tokens[2];
+                    let dest_res = parse_ipv6_prefix.parse_next(&mut s_dest);
+                    let nh_res = parse_ipv6.parse_next(&mut s_nh);
+                    match (dest_res, nh_res) {
+                        (Ok(dest), Ok(next_hop)) => {
+                            static_routes_v6.push(Ipv6StaticRoute {
+                                destination: dest,
+                                next_hop,
+                            });
+                        }
+                        _ => {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed IPv6 static route destination or next-hop"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "malformed IPv6 static route statement".to_string(),
+                    });
+                }
             } else {
                 unparsed_lines.push(UnparsedLine {
                     file_path: filename.map(String::from),
                     line_number: line_num,
                     content: line.to_string(),
                     reason: "unsupported routing-options command".to_string(),
+                });
+            }
+            continue;
+        }
+
+        // 4. Protocols OSPF3 (OSPFv3):
+        // set protocols ospf3 area <area> interface <name> ...
+        if let Some(stripped) = cmd.strip_prefix("protocols ospf3 ") {
+            has_ospfv3 = true;
+            let rest_ospf = stripped.trim();
+
+            if let Some(stripped_area) = rest_ospf.strip_prefix("area ") {
+                let rest_area = stripped_area.trim();
+                let mut s = rest_area;
+                let area_id_res = parse_ospf_area.parse_next(&mut s);
+                if let Ok(area_id) = area_id_res {
+                    s = s.trim();
+                    if let Some(stripped_iface) = s.strip_prefix("interface ") {
+                        let rest_iface = stripped_iface.trim();
+                        let tokens: Vec<&str> = rest_iface.split_whitespace().collect();
+                        if !tokens.is_empty() {
+                            let iface_name = tokens[0].to_string();
+                            let iface_entry = ospfv3_areas
+                                .entry(area_id)
+                                .or_default()
+                                .entry(iface_name)
+                                .or_default();
+
+                            let sub_tokens = &tokens[1..];
+                            if !sub_tokens.is_empty() {
+                                if sub_tokens[0] == "passive" {
+                                    iface_entry.passive = Some(true);
+                                } else if sub_tokens.len() >= 2 && sub_tokens[0] == "metric" {
+                                    if let Ok(cost) = sub_tokens[1].parse::<u16>() {
+                                        iface_entry.cost = Some(cost);
+                                    } else {
+                                        unparsed_lines.push(UnparsedLine {
+                                            file_path: filename.map(String::from),
+                                            line_number: line_num,
+                                            content: line.to_string(),
+                                            reason: "invalid OSPFv3 metric cost".to_string(),
+                                        });
+                                    }
+                                } else {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "unsupported OSPFv3 interface option".to_string(),
+                                    });
+                                }
+                            }
+                        } else {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed OSPFv3 interface statement".to_string(),
+                            });
+                        }
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "unsupported OSPFv3 area option".to_string(),
+                        });
+                    }
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "malformed OSPFv3 area ID".to_string(),
+                    });
+                }
+            } else {
+                unparsed_lines.push(UnparsedLine {
+                    file_path: filename.map(String::from),
+                    line_number: line_num,
+                    content: line.to_string(),
+                    reason: "unsupported OSPFv3 command".to_string(),
                 });
             }
             continue;
@@ -451,12 +623,36 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         });
                     }
                 } else {
-                    unparsed_lines.push(UnparsedLine {
-                        file_path: filename.map(String::from),
-                        line_number: line_num,
-                        content: line.to_string(),
-                        reason: "malformed BGP neighbor address".to_string(),
-                    });
+                    let mut ip6_s = tokens[3];
+                    if let Ok(peer_ip6) = parse_ipv6.parse_next(&mut ip6_s) {
+                        let nbr = bgp_neighbors_v6.entry(peer_ip6).or_default();
+                        if tokens.len() >= 6 && tokens[4] == "peer-as" {
+                            if let Ok(pas) = tokens[5].parse::<u32>() {
+                                nbr.peer_as = Some(pas);
+                            } else {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "invalid BGP peer-as number".to_string(),
+                                });
+                            }
+                        } else {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "unsupported BGP neighbor property".to_string(),
+                            });
+                        }
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed BGP neighbor address".to_string(),
+                        });
+                    }
                 }
             } else if tokens.len() >= 3 && tokens[0] == "group" && tokens[2] == "local-as" {
                 if let Ok(las) = tokens[3].parse::<u32>() {
@@ -606,6 +802,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         // we shouldn't emit a separate ge-0/0/0.
         let has_child_unit = !name.contains('.')
             && raw_iface.ipv4.is_none()
+            && raw_iface.ipv6.is_none()
             && all_keys
                 .iter()
                 .any(|k| k.starts_with(&format!("{}.", name)));
@@ -636,12 +833,35 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             }
         }
 
+        // Attach OSPFv3 configuration if this interface participates in any OSPFv3 area
+        let mut iface_ospfv3 = None;
+        for (area_id, area_ifaces) in &ospfv3_areas {
+            let matched_cfg = area_ifaces.get(&name).or_else(|| {
+                if let Some(base) = name.split('.').next() {
+                    area_ifaces.get(base)
+                } else {
+                    None
+                }
+            });
+
+            if let Some(ospf_opt) = matched_cfg {
+                iface_ospfv3 = Some(InterfaceOspfConfig {
+                    area: area_id.clone(),
+                    cost: ospf_opt.cost,
+                    passive: ospf_opt.passive,
+                });
+                break;
+            }
+        }
+
         interfaces.push(Interface {
             name: raw_iface.name,
             description: raw_iface.description,
             enabled: !raw_iface.disable,
             ipv4: raw_iface.ipv4,
+            ipv6: raw_iface.ipv6,
             ospf: iface_ospf,
+            ospfv3: iface_ospfv3,
         });
     }
 
@@ -658,8 +878,17 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         None
     };
 
+    let ospfv3 = if has_ospfv3 || !ospfv3_areas.is_empty() {
+        Some(Ospf6Process {
+            process_id: 1,
+            router_id: ospf_router_id,
+        })
+    } else {
+        None
+    };
+
     // Construct BgpProcess if BGP was configured
-    let bgp = if has_bgp || !bgp_neighbors.is_empty() {
+    let bgp = if has_bgp || !bgp_neighbors.is_empty() || !bgp_neighbors_v6.is_empty() {
         let mut neighbors = Vec::new();
         for (peer_addr, nbr_raw) in bgp_neighbors {
             if let Some(peer_as) = nbr_raw.peer_as {
@@ -670,14 +899,30 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             }
         }
         neighbors.sort_by_key(|n| n.remote_address);
+
+        let mut neighbors_v6 = Vec::new();
+        for (peer_addr, nbr_raw) in bgp_neighbors_v6 {
+            if let Some(peer_as) = nbr_raw.peer_as {
+                neighbors_v6.push(BgpNeighborV6 {
+                    remote_address: peer_addr,
+                    remote_as: peer_as,
+                });
+            }
+        }
+        neighbors_v6.sort_by_key(|n| n.remote_address);
+
         bgp_networks.sort();
         bgp_networks.dedup();
+        bgp_networks_v6.sort();
+        bgp_networks_v6.dedup();
 
         Some(BgpProcess {
             as_number: bgp_as.unwrap_or(0),
             router_id: bgp_router_id,
             neighbors,
             networks: bgp_networks,
+            neighbors_v6,
+            networks_v6: bgp_networks_v6,
         })
     } else {
         None
@@ -694,8 +939,10 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         hostname,
         interfaces,
         ospf,
+        ospfv3,
         bgp,
         static_routes,
+        static_routes_v6,
         prefix_lists,
         unparsed_lines,
     }

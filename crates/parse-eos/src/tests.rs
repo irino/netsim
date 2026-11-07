@@ -123,3 +123,68 @@ ip prefix-list PL-BGP seq 20 deny 0.0.0.0/0
     assert_eq!(pl.entries[1].action, PolicyAction::Deny);
     assert_eq!(pl.entries[1].prefix.to_string(), "0.0.0.0/0");
 }
+
+#[test]
+fn test_parse_eos_ipv6() {
+    let input = r#"!
+hostname eos-v6
+!
+interface Ethernet1
+   description IPv6 uplink
+   no shutdown
+   ipv6 address 2001:db8:1::1/64
+   ipv6 ospf 1 area 0
+!
+ipv6 route 2001:db8:2::/64 2001:db8:1::2
+!
+router ospf3 1
+   router-id 1.1.1.1
+!
+router bgp 65001
+   router-id 1.1.1.1
+   neighbor 2001:db8:1::2 remote-as 65002
+   address-family ipv6
+      network 2001:db8:2::/64
+   exit-address-family
+!
+"#;
+    let dev = parse_eos_config(input, Some("eos-v6.cfg"));
+    assert_eq!(dev.hostname, "eos-v6");
+    assert_eq!(dev.interfaces.len(), 1);
+    let iface = &dev.interfaces[0];
+    assert_eq!(iface.name, "Ethernet1");
+    assert_eq!(iface.ipv6.as_ref().unwrap().to_string(), "2001:db8:1::1/64");
+    assert!(iface.ospfv3.is_some());
+    assert_eq!(
+        iface.ospfv3.as_ref().unwrap().area,
+        ir::OspfAreaId::Number(0)
+    );
+
+    assert_eq!(dev.static_routes_v6.len(), 1);
+    assert_eq!(
+        dev.static_routes_v6[0].destination.to_string(),
+        "2001:db8:2::/64"
+    );
+    assert_eq!(
+        dev.static_routes_v6[0].next_hop.to_string(),
+        "2001:db8:1::2"
+    );
+
+    assert!(dev.ospfv3.is_some());
+    assert_eq!(dev.ospfv3.as_ref().unwrap().process_id, 1);
+    assert_eq!(
+        dev.ospfv3.as_ref().unwrap().router_id,
+        Some(Ipv4Addr::new(1, 1, 1, 1))
+    );
+
+    assert!(dev.bgp.is_some());
+    let bgp = dev.bgp.as_ref().unwrap();
+    assert_eq!(bgp.neighbors_v6.len(), 1);
+    assert_eq!(
+        bgp.neighbors_v6[0].remote_address.to_string(),
+        "2001:db8:1::2"
+    );
+    assert_eq!(bgp.neighbors_v6[0].remote_as, 65002);
+    assert_eq!(bgp.networks_v6.len(), 1);
+    assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
+}

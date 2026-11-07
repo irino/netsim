@@ -1,0 +1,11 @@
+set system host-name "junos-r2"
+set interfaces lo0 unit 0 family inet6 address 2001:db8:2::1/128
+set interfaces ge-0/0/0 unit 0 description "Link to Cisco IOS"
+set interfaces ge-0/0/0 unit 0 family inet6 address 2001:db8:13::2/64
+set interfaces ge-0/0/1 unit 0 description "Link to Arista EOS"
+set interfaces ge-0/0/1 unit 0 family inet6 address 2001:db8:23::2/64
+set routing-options router-id 2.2.2.2
+set routing-options rib inet6.0 static route 2001:db8:99::/64 next-hop 2001:db8:13::1
+set protocols ospf3 area 0.0.0.0 interface lo0.0
+set protocols ospf3 area 0.0.0.0 interface ge-0/0/0.0
+set protocols ospf3 area 0.0.0.0 interface ge-0/0/1.0

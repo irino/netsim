@@ -71,6 +71,18 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
                 if_obj.insert("ietf-ip:ipv4".to_string(), ipv4_obj);
             }
 
+            if let Some(ip) = &iface.ipv6 {
+                let ipv6_obj = json!({
+                    "address": [
+                        {
+                            "ip": ip.address.to_string(),
+                            "prefix-length": ip.prefix_length.value()
+                        }
+                    ]
+                });
+                if_obj.insert("ietf-ip:ipv6".to_string(), ipv6_obj);
+            }
+
             if_entries.push(Value::Object(if_obj));
         }
 
@@ -197,25 +209,45 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
     }
 
     // Static routes mapping (NMDA static-routes in control-plane-protocol)
-    if !config.static_routes.is_empty() {
-        let mut routes = Vec::new();
-        for sr in &config.static_routes {
-            routes.push(json!({
-                "destination-prefix": format!("{}/{}", sr.destination.address, sr.destination.prefix_length),
-                "next-hop": {
-                    "next-hop-address": sr.next_hop.to_string()
-                }
-            }));
+    if !config.static_routes.is_empty() || !config.static_routes_v6.is_empty() {
+        let mut sr_container = serde_json::Map::new();
+
+        if !config.static_routes.is_empty() {
+            let mut routes = Vec::new();
+            for sr in &config.static_routes {
+                routes.push(json!({
+                    "destination-prefix": format!("{}/{}", sr.destination.address, sr.destination.prefix_length),
+                    "next-hop": {
+                        "next-hop-address": sr.next_hop.to_string()
+                    }
+                }));
+            }
+            sr_container.insert(
+                "ietf-ipv4-unicast-routing:ipv4".to_string(),
+                json!({ "route": routes }),
+            );
+        }
+
+        if !config.static_routes_v6.is_empty() {
+            let mut routes_v6 = Vec::new();
+            for sr in &config.static_routes_v6 {
+                routes_v6.push(json!({
+                    "destination-prefix": format!("{}/{}", sr.destination.address, sr.destination.prefix_length),
+                    "next-hop": {
+                        "next-hop-address": sr.next_hop.to_string()
+                    }
+                }));
+            }
+            sr_container.insert(
+                "ietf-ipv6-unicast-routing:ipv6".to_string(),
+                json!({ "route": routes_v6 }),
+            );
         }
 
         control_plane_protocols.push(json!({
             "type": "ietf-routing:static",
             "name": "static-routing",
-            "static-routes": {
-                "ietf-ipv4-unicast-routing:ipv4": {
-                    "route": routes
-                }
-            }
+            "static-routes": Value::Object(sr_container)
         }));
     }
 

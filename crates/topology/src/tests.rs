@@ -1,5 +1,5 @@
 use super::*;
-use ir::{DeviceConfig, Interface, Ipv4Prefix};
+use ir::{DeviceConfig, Interface, Ipv4Prefix, Ipv6Prefix};
 
 fn make_device(hostname: &str, interfaces: Vec<Interface>) -> DeviceConfig {
     DeviceConfig {
@@ -7,7 +7,9 @@ fn make_device(hostname: &str, interfaces: Vec<Interface>) -> DeviceConfig {
         interfaces,
         ospf: None,
         bgp: None,
+        ospfv3: None,
         static_routes: Vec::new(),
+        static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         unparsed_lines: Vec::new(),
     }
@@ -19,7 +21,9 @@ fn make_iface(name: &str, ip: Option<&str>, enabled: bool) -> Interface {
         description: None,
         enabled,
         ipv4: ip.map(|s| s.parse::<Ipv4Prefix>().unwrap()),
+        ipv6: None,
         ospf: None,
+        ospfv3: None,
     }
 }
 
@@ -281,4 +285,53 @@ fn test_duplicate_links_and_same_device_subnet() {
     assert!(topo.warnings[0]
         .message
         .contains("multiple interfaces on the same device"));
+}
+
+fn make_iface_v6(name: &str, ip6: Option<&str>, enabled: bool) -> Interface {
+    Interface {
+        name: name.to_string(),
+        description: None,
+        enabled,
+        ipv4: None,
+        ipv6: ip6.map(|s| s.parse::<Ipv6Prefix>().unwrap()),
+        ospf: None,
+        ospfv3: None,
+    }
+}
+
+#[test]
+fn test_p2p_link_inference_ipv6() {
+    let dev1 = make_device(
+        "R1",
+        vec![make_iface_v6("eth0", Some("2001:db8:1::1/64"), true)],
+    );
+    let dev2 = make_device(
+        "R2",
+        vec![make_iface_v6("eth0", Some("2001:db8:1::2/64"), true)],
+    );
+
+    let topo = infer_topology(&[dev1, dev2]);
+    assert_eq!(topo.links.len(), 1);
+    assert!(topo.warnings.is_empty());
+
+    let link = &topo.links[0];
+    assert_eq!(link.subnet.to_string(), "2001:db8:1::/64");
+    assert_eq!(link.endpoint_a.hostname, "R1");
+    assert_eq!(link.endpoint_b.hostname, "R2");
+}
+
+#[test]
+fn test_dual_stack_single_link_inference() {
+    let mut if1 = make_iface("eth0", Some("10.0.0.1/24"), true);
+    if1.ipv6 = Some("2001:db8:1::1/64".parse().unwrap());
+    let mut if2 = make_iface("eth0", Some("10.0.0.2/24"), true);
+    if2.ipv6 = Some("2001:db8:1::2/64".parse().unwrap());
+
+    let dev1 = make_device("R1", vec![if1]);
+    let dev2 = make_device("R2", vec![if2]);
+
+    let topo = infer_topology(&[dev1, dev2]);
+    // Should deduplicate to 1 link between R1 and R2
+    assert_eq!(topo.links.len(), 1);
+    assert_eq!(topo.links[0].subnet.to_string(), "10.0.0.0/24");
 }
