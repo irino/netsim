@@ -208,17 +208,17 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
 - **zebra-rs ポリシーエミッタ**:
   - IR のルーティングポリシーとプレフィックスリストを zebra-rs のトップレベル `prefix-set` および `policy` YAML 構造へとマッピングして出力。
 
-### Phase 2: 自動ラボデプロイと収束検証（`netsim verify`）
-現在、`netsim gen-lab` は各種成果物を生成しますが、Containerlab でのデプロイや収束確認には手動での CLI コマンド実行が必要です。
+### Phase 2: 自動ラボデプロイと収束検証（`netsim verify`）（実装完了）
+`netsim verify`（および別名 `netsim test`）により、Containerlab でのデプロイから収束確認、インテント検証、ラボ破棄までを自動実行します。
 
 - **自動エミュレーションランナー**:
-  - サブコマンドの追加（例: `netsim verify --lab-dir ./lab/` または `netsim test`）:
+  - サブコマンド `netsim verify --lab-dir ./lab/`（または `netsim test`）:
     - `containerlab deploy -t topology.clab.yml` を実行。
     - 各ルーティングプロトコルが収束するかタイムアウトするまで、Docker/コンテナ exec 経由で `vtyctl show ip route` / `vtyctl show ipv6 route` をポーリング。
     - 推論されたデバイスの Loopback 間（IPv4 & IPv6 双方向）でデータプレーン ping テストを実行。
-    - 完了後に自動で `containerlab destroy` を実行。
+    - 完了時および失敗時に自動で `containerlab destroy -t topology.clab.yml --cleanup` を実行。
 - **到達性マトリクスとインテント表明**:
-  - ユーザーが `intent.yml`（例: `assert: ping r1 -> r5 loopback`）を指定できるようにし、ネットワークエミュレーションが運用上の意図（インテント）を満たしているかを自動検証。
+  - `intent.yml`（例: `assert: ping r1 -> r5 loopback` や `route r1 has 10.0.0.0/24`）を指定できるようにし、ネットワークエミュレーションが運用上の意図（インテント）を満たしているかを自動検証。
 
 ### Phase 3: IS-IS プロトコルと高度なルーティング機能
 - **IS-IS ルーティングプロトコル**:

@@ -1,3 +1,4 @@
+use crate::verify::{CommandRunner, LabVerifier, ProcessRunner, VerifyError, VerifyOptions};
 use clap::{Parser, Subcommand};
 use emit_clab::emit_clab_topology;
 use emit_zebra::emit_zebra;
@@ -9,6 +10,7 @@ use parse_iosxr::parse_iosxr_config;
 use parse_junos::parse_junos_config;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
 use topology::infer_topology;
 
@@ -22,6 +24,8 @@ pub enum CliError {
     NoConfigsFound(PathBuf),
     #[error("Conversion error: {0}")]
     Conversion(String),
+    #[error("Verification error: {0}")]
+    Verification(#[from] VerifyError),
 }
 
 #[derive(Parser, Debug)]
@@ -66,6 +70,46 @@ pub enum Commands {
         #[arg(long, default_value = "netsim-lab")]
         lab_name: String,
     },
+
+    /// Deploy lab on Containerlab, poll routing convergence, run loopback pings, and assert intent
+    #[command(alias = "test")]
+    Verify {
+        /// Directory containing generated lab artifacts (topology.clab.yml, *.zebra.yaml)
+        #[arg(long, value_name = "DIR", default_value = "./lab/")]
+        lab_dir: PathBuf,
+
+        /// Optional path to topology.clab.yml file
+        #[arg(long, value_name = "FILE")]
+        topology: Option<PathBuf>,
+
+        /// Path to intent assertion file (default: <lab-dir>/intent.yml if present)
+        #[arg(long, value_name = "FILE")]
+        intent: Option<PathBuf>,
+
+        /// Convergence polling timeout in seconds (default: 60)
+        #[arg(long, default_value = "60")]
+        timeout: u64,
+
+        /// Polling interval in seconds (default: 2)
+        #[arg(long, default_value = "2")]
+        interval: u64,
+
+        /// Skip containerlab destroy upon completion
+        #[arg(long, default_value = "false")]
+        skip_destroy: bool,
+
+        /// Execute containerlab and docker commands with sudo
+        #[arg(long, default_value = "false")]
+        sudo: bool,
+
+        /// Binary path for containerlab
+        #[arg(long, default_value = "containerlab")]
+        clab_bin: String,
+
+        /// Binary path for docker
+        #[arg(long, default_value = "docker")]
+        docker_bin: String,
+    },
 }
 
 pub fn run(cli: Cli) -> Result<(), CliError> {
@@ -76,7 +120,38 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
             out,
             lab_name,
         } => run_gen_lab(&configs, &out, &lab_name),
+        Commands::Verify {
+            lab_dir,
+            topology,
+            intent,
+            timeout,
+            interval,
+            skip_destroy,
+            sudo,
+            clab_bin,
+            docker_bin,
+        } => {
+            let opts = VerifyOptions {
+                lab_dir,
+                topology_file: topology,
+                intent_file: intent,
+                timeout: Duration::from_secs(timeout),
+                interval: Duration::from_secs(interval),
+                skip_destroy,
+                sudo,
+                clab_bin,
+                docker_bin,
+            };
+            run_verify(&opts, &ProcessRunner)
+        }
     }
+}
+
+pub fn run_verify(opts: &VerifyOptions, runner: &dyn CommandRunner) -> Result<(), CliError> {
+    let verifier = LabVerifier::new(opts, runner);
+    verifier.run_pipeline()?;
+    println!("==> Verification PASSED successfully!");
+    Ok(())
 }
 
 fn detect_and_parse_config(

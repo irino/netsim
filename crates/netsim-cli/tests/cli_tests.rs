@@ -313,3 +313,26 @@ fn test_gen_lab_empty_directory_error() {
     assert!(run(cli).is_err());
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_verify_missing_lab_dir() {
+    let tmp = create_temp_dir("verify_missing");
+    let missing_dir = tmp.join("does_not_exist");
+
+    let cli = Cli {
+        command: Commands::Verify {
+            lab_dir: missing_dir,
+            topology: None,
+            intent: None,
+            timeout: 5,
+            interval: 1,
+            skip_destroy: false,
+            sudo: false,
+            clab_bin: "containerlab".to_string(),
+            docker_bin: "docker".to_string(),
+        },
+    };
+
+    assert!(run(cli).is_err());
+    let _ = fs::remove_dir_all(&tmp);
+}

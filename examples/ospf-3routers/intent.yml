@@ -1,0 +1,8 @@
+# Operational Intent Definition for ospf-3routers
+# Validates that all routers reach each other's loopback and subnets converge.
+
+assert: ping R1 -> R3 loopback
+assertions:
+  - ping R2 -> R1 loopback
+  - ping R3 -> R2 loopback
+  - route R1 has 10.0.23.0/24
