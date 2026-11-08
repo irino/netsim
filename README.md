@@ -169,6 +169,45 @@ docker exec -it clab-mixed-lab-cisco-r1 ping -c 3 2.2.2.2
 sudo containerlab destroy -t lab-mixed/topology.clab.yml
 ```
 
+---
+
+### 4. Automated Deployment & Verification (`verify` / `test`)
+
+The `verify` command (aliased to `test`) automates the entire lifecycle:
+1. Deploys the Containerlab topology (`containerlab deploy -t topology.clab.yml`).
+2. Polls `vtyctl show ip route` / `vtyctl show ipv6 route` on all nodes until routing protocols converge (or timeout).
+3. Executes automated data-plane ping tests across all inferred device loopbacks (both IPv4 & IPv6).
+4. Validates operational assertions defined in `intent.yml` (e.g. `assert: ping r1 -> r5 loopback`).
+5. Automatically tears down the lab (`containerlab destroy -t topology.clab.yml --cleanup`).
+
+#### Example Usage:
+```bash
+# Verify generated lab in ./lab-ospf/ with automated convergence check and loopback pings
+cargo run --bin netsim -- verify --lab-dir ./lab-ospf/
+
+# Verify with custom timeout and an explicit intent file
+cargo run --bin netsim -- verify \
+  --lab-dir ./lab-ospf/ \
+  --intent ./examples/ospf-3routers/intent.yml \
+  --timeout 90
+
+# Retain lab after verification (skip containerlab destroy)
+cargo run --bin netsim -- verify --lab-dir ./lab-ospf/ --skip-destroy
+```
+
+#### Intent Assertion Specification (`intent.yml`):
+```yaml
+# Single assertion shorthand:
+assert: ping R1 -> R3 loopback
+
+# Multiple assertions:
+assertions:
+  - ping R2 -> R1 loopback
+  - ping R3 -> R2 loopback
+  - ping R1 -> 1.1.1.1
+  - route R1 has 10.0.23.0/24
+```
+
 ## IETF YANG Schema Validation & Drift Testing (`crates/validate-yang`)
 
 The project aligns its vendor-independent IR (`crates/ir`) with standard IETF YANG data models. `crates/validate-yang` provides automated validation against pinned upstream YANG schemas using `yang3` (libyang bindings) and `holo-yang`:

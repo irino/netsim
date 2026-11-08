@@ -159,6 +159,7 @@ Unified CLI interface:
 ```bash
 netsim convert --vendor <ios|junos|eos|iosxr|frr> --in <FILE> --out <FILE>
 netsim gen-lab --configs <DIR> --out <DIR> [--lab-name <NAME>]
+netsim verify --lab-dir <DIR> [--intent <FILE>] [--timeout <SECS>]
 ```
 
 ## 8. Testing Strategy
@@ -193,17 +194,17 @@ Routing policies and prefix lists (both IPv4 and IPv6) are supported across the 
 - **zebra-rs Policy Emitter**:
   - Emits IR prefix lists and route policies into zebra-rs top-level `prefix-set` and `policy` YAML structures matching runtime schema.
 
-### Phase 2: Automated Lab Deployment & Convergence Verification (`netsim verify`)
-Currently, `netsim gen-lab` generates artifacts, but deploying with Containerlab and checking convergence requires manual CLI commands.
+### Phase 2: Automated Lab Deployment & Convergence Verification (`netsim verify`) (Implemented)
+`netsim verify` (and alias `netsim test`) automates Containerlab deployment and verification:
 
 - **Automated Emulation Runner**:
-  - Add a subcommand (e.g., `netsim verify --lab-dir ./lab/` or `netsim test`):
+  - Subcommand `netsim verify --lab-dir ./lab/` (or `netsim test`):
     - Executes `containerlab deploy -t topology.clab.yml`.
-    - Polls `vtyctl show ip route` / `vtyctl show ipv6 route` via Docker/container exec until routing protocols converge or timeout occurs.
+    - Polls `vtyctl show ip route` / `vtyctl show ipv6 route` via Docker container exec until routing protocols converge or timeout occurs.
     - Runs data-plane ping tests across inferred device loopbacks (both IPv4 & IPv6).
-    - Automatically executes `containerlab destroy`.
+    - Automatically executes `containerlab destroy` with cleanup on completion or failure.
 - **Reachability Matrix & Intent Assertion**:
-  - Allow users to specify an `intent.yml` (e.g., `assert: ping r1 -> r5 loopback`) to validate that network emulation meets operational intent.
+  - Allows specifying an `intent.yml` (e.g., `assert: ping r1 -> r5 loopback` or `route r1 has 10.0.0.0/24`) to validate operational intent.
 
 ### Phase 3: IS-IS Protocol & Advanced Routing Knobs
 - **IS-IS Routing Protocol**:
