@@ -193,18 +193,20 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
 
 ## 11. 今後の開発ロードマップ（Future Iterations）
 
-### Phase 1: ルーティングポリシーと Route Map / Policy Statement（最優先課題）
-現在、複数のベンダーパーサーでプレフィックスリストが IR にパースされていますが、zebra-rs 側のルーティングポリシースキーマ統合が保留されているため `emit-zebra` は `EmitWarning` を出力しています。
+### Phase 1: ルーティングポリシーと Route Map / Policy Statement（実装済み）
+ルーティングポリシーおよびプレフィックスリスト（IPv4およびIPv6対応）が IR、各ベンダーパーサー、IETF YANG検証、および zebra-rs YAML設定生成にわたり実装されました:
 
 - **ルーティングポリシー IR と IPv6 プレフィックスリスト**:
-  - `ietf-routing-policy` (RFC 9067) に準拠した `PolicyDefinition` / `RouteMap` を `crates/ir` にモデリング。
-  - `PrefixList` の IPv6 対応拡張（Cisco IOS、Arista EOS、FRR の `ipv6 prefix-list`、および Junos `inet6` 配下の `prefix-list`）。
+  - `ietf-routing-policy` (RFC 9067) に準拠した `PolicyDefinition`, `PolicyStatement`, `PolicyConditions`, `PolicyActions` を `crates/ir` にモデリング。
+  - IPv6 プレフィックスリスト（`PrefixListV6`, `PrefixListEntryV6`, `PrefixRangeV6`）の範囲検証（`prefix_length <= ge <= le <= 128`）を実装。
 - **ベンダー別ポリシーパーサー**:
-  - Cisco IOS / Arista EOS / FRR: `route-map <NAME> {permit|deny} <SEQ>`（`match ip address prefix-list`, `set metric`, `set local-preference` 等）。
-  - Cisco IOS XR: `route-policy <NAME>`（RPL 言語）。
-  - Junos: `policy-options policy-statement <NAME> term <TERM>`（`from prefix-list`, `then accept/reject` 等）。
+  - Cisco IOS / Arista EOS / FRR: `ipv6 prefix-list <NAME> [seq <SEQ>] {permit|deny} <PREFIX> [ge <GE>] [le <LE>]` および `route-map <NAME> {permit|deny} <SEQ>`（`match ip address prefix-list`, `match ipv6 address prefix-list`, `set metric`, `set local-preference`）のパースを実装。
+  - Cisco IOS XR: `prefix-set <NAME>` 配下の IPv4/IPv6 プレフィックスおよび `route-policy <NAME>`（RPL 文: `if destination in <PFX> then ... pass/drop`, `set med`, `set local-preference`, `end-policy`）のパースを実装。
+  - Junos: `set policy-options prefix-list <NAME> <PREFIX>`（IPv4/IPv6）および `set policy-options policy-statement <NAME> term <TERM>`（`from prefix-list`, `then accept/reject`, `then metric`, `then local-preference`）のパースを実装。
+- **IETF YANG スキーマ検証**:
+  - IR のプレフィックスリストおよびポリシールールを RFC 7951 準拠の `ietf-routing-policy:routing-policy` YANG JSON（`defined-sets -> prefix-sets` および `policy-definitions -> policy-definition`）へとマッピング。
 - **zebra-rs ポリシーエミッタ**:
-  - IR のルーティングポリシーを zebra-rs のトップレベル `prefix-set` および `policy` YAML 構造へとマッピング。
+  - IR のルーティングポリシーとプレフィックスリストを zebra-rs のトップレベル `prefix-set` および `policy` YAML 構造へとマッピングして出力。
 
 ### Phase 2: 自動ラボデプロイと収束検証（`netsim verify`）
 現在、`netsim gen-lab` は各種成果物を生成しますが、Containerlab でのデプロイや収束確認には手動での CLI コマンド実行が必要です。

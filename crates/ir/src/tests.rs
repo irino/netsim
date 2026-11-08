@@ -145,6 +145,30 @@ fn test_serde_serialization_deserialization() {
                 },
             ],
         }],
+        prefix_lists_v6: vec![PrefixListV6 {
+            name: "TEST-PREFIX-LIST-V6".to_string(),
+            entries: vec![PrefixListEntryV6 {
+                sequence: 10,
+                action: PolicyAction::Permit,
+                prefix: "2001:db8:1::/48".parse().unwrap(),
+                range: None,
+            }],
+        }],
+        policies: vec![PolicyDefinition {
+            name: "ROUTE-MAP-1".to_string(),
+            statements: vec![PolicyStatement {
+                name: "10".to_string(),
+                conditions: PolicyConditions {
+                    match_prefix_set: Some("FILTER-BGP".to_string()),
+                    match_prefix_set_v6: None,
+                },
+                actions: PolicyActions {
+                    policy_result: PolicyAction::Permit,
+                    set_metric: Some(100),
+                    set_local_preference: Some(200),
+                },
+            }],
+        }],
         unparsed_lines: vec![UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
             line_number: 10,
@@ -246,6 +270,8 @@ fn test_prefix_list_serialization_shape() {
                 },
             ],
         }],
+        prefix_lists_v6: vec![],
+        policies: vec![],
         unparsed_lines: vec![],
     };
 

@@ -150,6 +150,65 @@ pub struct ZebraRouter {
     pub bgp: Option<ZebraBgp>,
 }
 
+/// zebra-rs prefix-set entry (`prefix-set -> prefixes`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraPrefixEntry {
+    pub prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ge: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub le: Option<u8>,
+}
+
+/// zebra-rs prefix-set container (`prefix-set`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraPrefixSet {
+    pub name: String,
+    pub prefixes: Vec<ZebraPrefixEntry>,
+}
+
+/// zebra-rs match conditions (`policy -> entry -> match`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraPolicyMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix_set: Option<String>,
+}
+
+/// zebra-rs numeric set operation (`set: NUM`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraNumericSet {
+    pub set: u32,
+}
+
+/// zebra-rs set clauses (`policy -> entry -> set`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraPolicySet {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub med: Option<ZebraNumericSet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_preference: Option<ZebraNumericSet>,
+}
+
+/// zebra-rs policy entry (`policy -> entry`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraPolicyEntry {
+    pub number: u32,
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_: Option<ZebraPolicyMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set: Option<ZebraPolicySet>,
+}
+
+/// zebra-rs policy container (`policy`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraPolicy {
+    pub name: String,
+    pub entry: Vec<ZebraPolicyEntry>,
+}
+
 /// Root configuration representation for zebra-rs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraConfig {
@@ -160,6 +219,10 @@ pub struct ZebraConfig {
     pub ip6: Option<ZebraIp6>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub interface: Vec<ZebraInterface>,
+    #[serde(rename = "prefix-set", default, skip_serializing_if = "Vec::is_empty")]
+    pub prefix_set: Vec<ZebraPrefixSet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy: Vec<ZebraPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub router: Option<ZebraRouter>,
 }
@@ -311,16 +374,90 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         }
     }
 
-    // Report prefix-list configuration status
-    if !device.prefix_lists.is_empty() {
-        warnings.push(EmitWarning {
-            category: "prefix-list".to_string(),
-            message: format!(
-                "Routing policy prefix-lists ({} defined) emission to zebra-rs runtime configuration is pending routing-policy schema integration and will be omitted",
-                device.prefix_lists.len()
-            ),
+    // Prefix-set emission
+    let mut prefix_sets = Vec::new();
+    for pl in &device.prefix_lists {
+        let mut prefixes = Vec::new();
+        for entry in &pl.entries {
+            prefixes.push(ZebraPrefixEntry {
+                prefix: entry.prefix.to_string(),
+                ge: entry.range.as_ref().and_then(|r| r.ge).map(|p| p.value()),
+                le: entry.range.as_ref().and_then(|r| r.le).map(|p| p.value()),
+            });
+        }
+        prefix_sets.push(ZebraPrefixSet {
+            name: pl.name.clone(),
+            prefixes,
         });
     }
+
+    for pl in &device.prefix_lists_v6 {
+        let mut prefixes = Vec::new();
+        for entry in &pl.entries {
+            prefixes.push(ZebraPrefixEntry {
+                prefix: entry.prefix.to_string(),
+                ge: entry.range.as_ref().and_then(|r| r.ge).map(|p| p.value()),
+                le: entry.range.as_ref().and_then(|r| r.le).map(|p| p.value()),
+            });
+        }
+        prefix_sets.push(ZebraPrefixSet {
+            name: pl.name.clone(),
+            prefixes,
+        });
+    }
+    prefix_sets.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Policy emission
+    let mut policies = Vec::new();
+    for pol in &device.policies {
+        let mut entries = Vec::new();
+        for stmt in &pol.statements {
+            let number = stmt
+                .name
+                .parse::<u32>()
+                .unwrap_or_else(|_| (entries.len() as u32 + 1) * 10);
+            let action = match stmt.actions.policy_result {
+                ir::PolicyAction::Permit => "permit".to_string(),
+                ir::PolicyAction::Deny => "deny".to_string(),
+            };
+
+            let match_ps = stmt
+                .conditions
+                .match_prefix_set
+                .clone()
+                .or_else(|| stmt.conditions.match_prefix_set_v6.clone());
+            let match_ = match_ps.map(|ps| ZebraPolicyMatch {
+                prefix_set: Some(ps),
+            });
+
+            let set = if stmt.actions.set_metric.is_some()
+                || stmt.actions.set_local_preference.is_some()
+            {
+                Some(ZebraPolicySet {
+                    med: stmt.actions.set_metric.map(|m| ZebraNumericSet { set: m }),
+                    local_preference: stmt
+                        .actions
+                        .set_local_preference
+                        .map(|lp| ZebraNumericSet { set: lp }),
+                })
+            } else {
+                None
+            };
+
+            entries.push(ZebraPolicyEntry {
+                number,
+                action,
+                match_,
+                set,
+            });
+        }
+        entries.sort_by_key(|e| e.number);
+        policies.push(ZebraPolicy {
+            name: pol.name.clone(),
+            entry: entries,
+        });
+    }
+    policies.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Report unparsed lines preserved from parser
     for unparsed in &device.unparsed_lines {
@@ -457,6 +594,8 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             ip,
             ip6,
             interface: interfaces,
+            prefix_set: prefix_sets,
+            policy: policies,
             router,
         },
         warnings,

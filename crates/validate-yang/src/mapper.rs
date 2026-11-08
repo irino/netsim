@@ -267,8 +267,14 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
         None
     };
 
-    // 3. Map prefix-lists into ietf-routing-policy:routing-policy
-    let routing_policy_json = if !config.prefix_lists.is_empty() {
+    // 3. Map prefix-lists and policies into ietf-routing-policy:routing-policy
+    let has_routing_policy = !config.prefix_lists.is_empty()
+        || !config.prefix_lists_v6.is_empty()
+        || !config.policies.is_empty();
+
+    let routing_policy_json = if has_routing_policy {
+        let mut policy_obj = serde_json::Map::new();
+
         let mut prefix_sets = Vec::new();
         for pl in &config.prefix_lists {
             let mut prefixes = Vec::new();
@@ -289,7 +295,6 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
                     .unwrap_or_else(|| {
                         if let Some(ref r) = entry.range {
                             if r.ge.is_some() {
-                                // In Cisco IOS, when 'ge' is specified without 'le', upper defaults to 32
                                 32
                             } else {
                                 entry.prefix.prefix_length.value()
@@ -313,13 +318,127 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
             }));
         }
 
-        let policy_container = json!({
-            "defined-sets": {
-                "prefix-sets": {
-                    "prefix-set": prefix_sets
-                }
+        for pl in &config.prefix_lists_v6 {
+            let mut prefixes = Vec::new();
+            for entry in &pl.entries {
+                let mut prefix_obj = serde_json::Map::new();
+                prefix_obj.insert("ip-prefix".to_string(), json!(entry.prefix.to_string()));
+                let lower = entry
+                    .range
+                    .as_ref()
+                    .and_then(|r| r.ge)
+                    .map(|ge| ge.value())
+                    .unwrap_or_else(|| entry.prefix.prefix_length.value());
+                let upper = entry
+                    .range
+                    .as_ref()
+                    .and_then(|r| r.le)
+                    .map(|le| le.value())
+                    .unwrap_or_else(|| {
+                        if let Some(ref r) = entry.range {
+                            if r.ge.is_some() {
+                                128
+                            } else {
+                                entry.prefix.prefix_length.value()
+                            }
+                        } else {
+                            entry.prefix.prefix_length.value()
+                        }
+                    });
+
+                prefix_obj.insert("mask-length-lower".to_string(), json!(lower));
+                prefix_obj.insert("mask-length-upper".to_string(), json!(upper));
+                prefixes.push(Value::Object(prefix_obj));
             }
-        });
+
+            prefix_sets.push(json!({
+                "name": pl.name,
+                "mode": "ipv6",
+                "prefixes": {
+                    "prefix-list": prefixes
+                }
+            }));
+        }
+
+        if !prefix_sets.is_empty() {
+            policy_obj.insert(
+                "defined-sets".to_string(),
+                json!({
+                    "prefix-sets": {
+                        "prefix-set": prefix_sets
+                    }
+                }),
+            );
+        }
+
+        if !config.policies.is_empty() {
+            let mut policy_defs = Vec::new();
+            for pol in &config.policies {
+                let mut statements = Vec::new();
+                for stmt in &pol.statements {
+                    let mut stmt_obj = serde_json::Map::new();
+                    stmt_obj.insert("name".to_string(), json!(stmt.name));
+
+                    // Conditions
+                    let mut cond_obj = serde_json::Map::new();
+                    if let Some(ref ps_name) = stmt.conditions.match_prefix_set {
+                        cond_obj.insert(
+                            "match-prefix-set".to_string(),
+                            json!({
+                                "prefix-set": ps_name
+                            }),
+                        );
+                    } else if let Some(ref ps_name_v6) = stmt.conditions.match_prefix_set_v6 {
+                        cond_obj.insert(
+                            "match-prefix-set".to_string(),
+                            json!({
+                                "prefix-set": ps_name_v6
+                            }),
+                        );
+                    }
+                    if !cond_obj.is_empty() {
+                        stmt_obj.insert("conditions".to_string(), Value::Object(cond_obj));
+                    }
+
+                    // Actions
+                    let mut act_obj = serde_json::Map::new();
+                    let result_str = match stmt.actions.policy_result {
+                        ir::PolicyAction::Permit => "accept-route",
+                        ir::PolicyAction::Deny => "reject-route",
+                    };
+                    act_obj.insert("policy-result".to_string(), json!(result_str));
+
+                    if let Some(metric) = stmt.actions.set_metric {
+                        act_obj.insert(
+                            "set-metric".to_string(),
+                            json!({
+                                "metric-modification": "set-metric",
+                                "metric": metric
+                            }),
+                        );
+                    }
+                    stmt_obj.insert("actions".to_string(), Value::Object(act_obj));
+
+                    statements.push(Value::Object(stmt_obj));
+                }
+
+                policy_defs.push(json!({
+                    "name": pol.name,
+                    "statements": {
+                        "statement": statements
+                    }
+                }));
+            }
+
+            policy_obj.insert(
+                "policy-definitions".to_string(),
+                json!({
+                    "policy-definition": policy_defs
+                }),
+            );
+        }
+
+        let policy_container = Value::Object(policy_obj);
         root_obj.insert(
             "ietf-routing-policy:routing-policy".to_string(),
             policy_container.clone(),

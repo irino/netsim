@@ -362,7 +362,7 @@ ip prefix-list DUP seq 10 permit 10.0.0.0/8
 ip prefix-list DUP seq 10 deny 10.1.0.0/16
 ip prefix-list BAD-RANGE permit 10.0.0.0/16 ge 12
 ip prefix-list BAD-RANGE-2 permit 10.0.0.0/16 ge 28 le 24
-ipv6 prefix-list IPV6-PL seq 10 permit 2001:db8::/32
+ipv6 prefix-list IPV6-BAD permit 2001:db8::/48 ge 32
 "#;
 
     let device = parse_ios_config(cfg, Some("errors.cfg"));
@@ -401,15 +401,67 @@ ipv6 prefix-list IPV6-PL seq 10 permit 2001:db8::/32
         "invalid prefix-list length range: len <= ge <= le"
     );
 
-    // IPv6 prefix list
+    // IPv6 prefix list bad range
     assert_eq!(device.unparsed_lines[3].line_number, 7);
     assert_eq!(
         device.unparsed_lines[3].content,
-        "ipv6 prefix-list IPV6-PL seq 10 permit 2001:db8::/32"
+        "ipv6 prefix-list IPV6-BAD permit 2001:db8::/48 ge 32"
     );
     assert_eq!(
         device.unparsed_lines[3].reason,
-        "IPv6 prefix-lists are outside current IPv4 milestone scope"
+        "invalid prefix-list length range: len <= ge <= le"
+    );
+}
+
+#[test]
+fn test_cisco_ios_ipv6_prefix_list_and_route_map() {
+    let cfg = r#"
+hostname R1
+ipv6 prefix-list V6-PL seq 10 permit 2001:db8::/32 ge 48 le 64
+ipv6 prefix-list V6-PL seq 20 deny ::/0 le 128
+!
+route-map POLICY-1 permit 10
+ match ip address prefix-list PL-4
+ set metric 100
+ set local-preference 200
+!
+route-map POLICY-1 deny 20
+ match ipv6 address prefix-list V6-PL
+!
+"#;
+    let dev = parse_ios_config(cfg, Some("test.cfg"));
+    assert_eq!(dev.prefix_lists_v6.len(), 1);
+    assert_eq!(dev.prefix_lists_v6[0].name, "V6-PL");
+    assert_eq!(dev.prefix_lists_v6[0].entries.len(), 2);
+    assert_eq!(dev.prefix_lists_v6[0].entries[0].sequence, 10);
+    assert_eq!(
+        dev.prefix_lists_v6[0].entries[0].prefix.to_string(),
+        "2001:db8::/32"
+    );
+    assert!(dev.prefix_lists_v6[0].entries[0].range.is_some());
+    assert_eq!(dev.policies.len(), 1);
+    let pol = &dev.policies[0];
+    assert_eq!(pol.name, "POLICY-1");
+    assert_eq!(pol.statements.len(), 2);
+    assert_eq!(pol.statements[0].name, "10");
+    assert_eq!(
+        pol.statements[0].conditions.match_prefix_set.as_deref(),
+        Some("PL-4")
+    );
+    assert_eq!(pol.statements[0].actions.set_metric, Some(100));
+    assert_eq!(pol.statements[0].actions.set_local_preference, Some(200));
+    assert_eq!(
+        pol.statements[0].actions.policy_result,
+        ir::PolicyAction::Permit
+    );
+    assert_eq!(pol.statements[1].name, "20");
+    assert_eq!(
+        pol.statements[1].conditions.match_prefix_set_v6.as_deref(),
+        Some("V6-PL")
+    );
+    assert_eq!(
+        pol.statements[1].actions.policy_result,
+        ir::PolicyAction::Deny
     );
 }
 

@@ -178,18 +178,20 @@ netsim gen-lab --configs <DIR> --out <DIR> [--lab-name <NAME>]
 
 ## 10. Proposed Roadmap for Future Iterations
 
-### Phase 1: Routing Policy & Route Maps / Policy Statements (Next Priority)
-Currently, prefix lists are parsed into the IR for several vendors, but `emit-zebra` outputs an `EmitWarning` because zebra-rs routing policy schema integration is deferred.
+### Phase 1: Routing Policy & Route Maps / Policy Statements (Implemented)
+Routing policies and prefix lists (both IPv4 and IPv6) are supported across the IR, vendor parsers, IETF YANG validation, and zebra-rs YAML configuration generation:
 
 - **Routing Policy IR & IPv6 Prefix Lists**:
-  - Model `PolicyDefinition` / `RouteMap` in `crates/ir` conforming to `ietf-routing-policy` (RFC 9067).
-  - Extend `PrefixList` support to IPv6 (`ipv6 prefix-list` on Cisco IOS, Arista EOS, FRR, and Junos `prefix-list` under `inet6`).
+  - Modeled `PolicyDefinition`, `PolicyStatement`, `PolicyConditions`, and `PolicyActions` in `crates/ir` conforming to `ietf-routing-policy` (RFC 9067).
+  - Extended prefix lists to IPv6 (`PrefixListV6`, `PrefixListEntryV6`, `PrefixRangeV6`) with length validation (`prefix_length <= ge <= le <= 128`).
 - **Vendor Policy Parsers**:
-  - Cisco IOS / Arista EOS / FRR: `route-map <NAME> {permit|deny} <SEQ>` (`match ip address prefix-list`, `set metric`, `set local-preference`, etc.).
-  - Cisco IOS XR: `route-policy <NAME>` (RPL language).
-  - Junos: `policy-options policy-statement <NAME> term <TERM>` (`from prefix-list`, `then accept/reject`).
+  - Cisco IOS, Arista EOS, FRR: parses `ipv6 prefix-list <NAME> [seq <SEQ>] {permit|deny} <PREFIX> [ge <GE>] [le <LE>]` and `route-map <NAME> {permit|deny} <SEQ>` with `match ip address prefix-list`, `match ipv6 address prefix-list`, `set metric`, and `set local-preference`.
+  - Cisco IOS XR: parses IPv4 and IPv6 prefixes under `prefix-set <NAME>` and `route-policy <NAME>` (RPL statements `if destination in <PFX> then ... pass/drop`, `set med`, `set local-preference`, `end-policy`).
+  - Junos: parses IPv4 and IPv6 under `set policy-options prefix-list <NAME> <PREFIX>` and policy statements under `set policy-options policy-statement <NAME> term <TERM>` (`from prefix-list`, `then accept/reject`, `then metric`, `then local-preference`).
+- **IETF YANG Schema Validation**:
+  - Maps IR IPv4/IPv6 prefix lists and policy definitions into standard RFC 7951 YANG JSON for `ietf-routing-policy:routing-policy` (`defined-sets -> prefix-sets` and `policy-definitions -> policy-definition`).
 - **zebra-rs Policy Emitter**:
-  - Map IR route policies into zebra-rs top-level `prefix-set` and `policy` YAML structures.
+  - Emits IR prefix lists and route policies into zebra-rs top-level `prefix-set` and `policy` YAML structures matching runtime schema.
 
 ### Phase 2: Automated Lab Deployment & Convergence Verification (`netsim verify`)
 Currently, `netsim gen-lab` generates artifacts, but deploying with Containerlab and checking convergence requires manual CLI commands.
