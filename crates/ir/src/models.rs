@@ -628,13 +628,7 @@ impl<'de> Deserialize<'de> for PrefixListEntry {
         }
 
         let raw = RawEntry::deserialize(deserializer)?;
-        let range = raw.range.and_then(|r| {
-            if r.ge.is_none() && r.le.is_none() {
-                None
-            } else {
-                Some(r)
-            }
-        });
+        let range = raw.range.filter(|r| r.ge.is_some() || r.le.is_some());
 
         Ok(PrefixListEntry {
             sequence: raw.sequence,
@@ -682,13 +676,7 @@ impl<'de> Deserialize<'de> for PrefixListEntryV6 {
         }
 
         let raw = RawEntryV6::deserialize(deserializer)?;
-        let range = raw.range.and_then(|r| {
-            if r.ge.is_none() && r.le.is_none() {
-                None
-            } else {
-                Some(r)
-            }
-        });
+        let range = raw.range.filter(|r| r.ge.is_some() || r.le.is_some());
 
         Ok(PrefixListEntryV6 {
             sequence: raw.sequence,
