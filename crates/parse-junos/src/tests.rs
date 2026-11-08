@@ -230,3 +230,41 @@ set protocols bgp local-as 65001
     );
     assert_eq!(bgp.neighbors_v6[0].remote_as, 65002);
 }
+
+#[test]
+fn test_parse_junos_ipv6_prefix_list_and_policy_statement() {
+    let cfg = r#"
+set system host-name junos-r1
+set policy-options prefix-list PL-V6 2001:db8:1::/48
+set policy-options prefix-list PL-V6 2001:db8:2::/48
+set policy-options policy-statement PS-BGP term 1 from prefix-list PL-V6
+set policy-options policy-statement PS-BGP term 1 then metric 100
+set policy-options policy-statement PS-BGP term 1 then local-preference 200
+set policy-options policy-statement PS-BGP term 1 then accept
+set policy-options policy-statement PS-BGP term 2 then reject
+"#;
+    let dev = parse_junos_config(cfg, Some("junos.set"));
+    assert_eq!(dev.prefix_lists_v6.len(), 1);
+    assert_eq!(dev.prefix_lists_v6[0].name, "PL-V6");
+    assert_eq!(dev.prefix_lists_v6[0].entries.len(), 2);
+    assert_eq!(dev.policies.len(), 1);
+    let pol = &dev.policies[0];
+    assert_eq!(pol.name, "PS-BGP");
+    assert_eq!(pol.statements.len(), 2);
+    assert_eq!(pol.statements[0].name, "1");
+    assert_eq!(
+        pol.statements[0].conditions.match_prefix_set.as_deref(),
+        Some("PL-V6")
+    );
+    assert_eq!(pol.statements[0].actions.set_metric, Some(100));
+    assert_eq!(pol.statements[0].actions.set_local_preference, Some(200));
+    assert_eq!(
+        pol.statements[0].actions.policy_result,
+        ir::PolicyAction::Permit
+    );
+    assert_eq!(pol.statements[1].name, "2");
+    assert_eq!(
+        pol.statements[1].actions.policy_result,
+        ir::PolicyAction::Deny
+    );
+}

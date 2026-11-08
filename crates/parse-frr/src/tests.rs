@@ -168,3 +168,36 @@ router bgp 65001
     assert_eq!(bgp.networks_v6.len(), 1);
     assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
 }
+
+#[test]
+fn test_parse_frr_ipv6_prefix_list_and_route_map() {
+    let cfg = r#"
+hostname frr-r1
+!
+ipv6 prefix-list PL-V6 seq 10 permit 2001:db8:1::/48 ge 64 le 96
+ipv6 prefix-list PL-V6 seq 20 deny ::/0 le 128
+!
+route-map RM-POLICY permit 10
+ match ip address prefix-list PL-V4
+ set metric 50
+ set local-preference 150
+!
+route-map RM-POLICY deny 20
+ match ipv6 address prefix-list PL-V6
+!
+"#;
+    let dev = parse_frr_config(cfg, Some("frr.conf"));
+    assert_eq!(dev.prefix_lists_v6.len(), 1);
+    assert_eq!(dev.prefix_lists_v6[0].name, "PL-V6");
+    assert_eq!(dev.prefix_lists_v6[0].entries.len(), 2);
+    assert_eq!(dev.policies.len(), 1);
+    let pol = &dev.policies[0];
+    assert_eq!(pol.name, "RM-POLICY");
+    assert_eq!(pol.statements.len(), 2);
+    assert_eq!(pol.statements[0].actions.set_metric, Some(50));
+    assert_eq!(pol.statements[0].actions.set_local_preference, Some(150));
+    assert_eq!(
+        pol.statements[1].actions.policy_result,
+        ir::PolicyAction::Deny
+    );
+}

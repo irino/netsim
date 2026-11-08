@@ -509,6 +509,54 @@ impl PrefixRange {
     }
 }
 
+/// Prefix length range constraint for IPv6 prefix matching (ge, le).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixRangeV6 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ge: Option<Ipv6PrefixLength>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub le: Option<Ipv6PrefixLength>,
+}
+
+impl PrefixRangeV6 {
+    /// Validate prefix-range constraints against the IPv6 prefix length:
+    /// - If `ge` is set, `prefix_length <= ge <= 128`.
+    /// - If `le` is set, `prefix_length <= le <= 128`.
+    /// - If both `ge` and `le` are set, `ge <= le`.
+    pub fn validate(&self, prefix_len: Ipv6PrefixLength) -> Result<(), IrError> {
+        let p_len = prefix_len.value();
+        if let Some(ge) = self.ge {
+            if ge.value() < p_len {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "ge {} cannot be smaller than IPv6 prefix length {}",
+                    ge.value(),
+                    p_len
+                )));
+            }
+        }
+        if let Some(le) = self.le {
+            if le.value() < p_len {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "le {} cannot be smaller than IPv6 prefix length {}",
+                    le.value(),
+                    p_len
+                )));
+            }
+        }
+        if let (Some(ge), Some(le)) = (self.ge, self.le) {
+            if ge.value() > le.value() {
+                return Err(IrError::InvalidPrefixRange(format!(
+                    "ge {} cannot be greater than le {}",
+                    ge.value(),
+                    le.value()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Serialize `Ipv4Prefix` as a string (`10.0.0.0/8`).
 pub mod ipv4_prefix_str {
     use super::Ipv4Prefix;
@@ -530,8 +578,29 @@ pub mod ipv4_prefix_str {
     }
 }
 
+/// Serialize `Ipv6Prefix` as a string (`2001:db8::/32`).
+pub mod ipv6_prefix_str {
+    use super::Ipv6Prefix;
+    use serde::{de, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(prefix: &Ipv6Prefix, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&prefix.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Ipv6Prefix, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<Ipv6Prefix>().map_err(de::Error::custom)
+    }
+}
+
 /// A single entry in an IPv4 prefix-list.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PrefixListEntry {
     pub sequence: u32,
@@ -542,12 +611,142 @@ pub struct PrefixListEntry {
     pub range: Option<PrefixRange>,
 }
 
+impl<'de> Deserialize<'de> for PrefixListEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct RawEntry {
+            sequence: u32,
+            action: PolicyAction,
+            #[serde(with = "ipv4_prefix_str")]
+            prefix: Ipv4Prefix,
+            #[serde(flatten)]
+            range: Option<PrefixRange>,
+        }
+
+        let raw = RawEntry::deserialize(deserializer)?;
+        let range = raw.range.filter(|r| r.ge.is_some() || r.le.is_some());
+
+        Ok(PrefixListEntry {
+            sequence: raw.sequence,
+            action: raw.action,
+            prefix: raw.prefix,
+            range,
+        })
+    }
+}
+
 /// An IPv4 prefix list containing ordered entries.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct PrefixList {
     pub name: String,
     pub entries: Vec<PrefixListEntry>,
+}
+
+/// A single entry in an IPv6 prefix-list.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixListEntryV6 {
+    pub sequence: u32,
+    pub action: PolicyAction,
+    #[serde(with = "ipv6_prefix_str")]
+    pub prefix: Ipv6Prefix,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub range: Option<PrefixRangeV6>,
+}
+
+impl<'de> Deserialize<'de> for PrefixListEntryV6 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct RawEntryV6 {
+            sequence: u32,
+            action: PolicyAction,
+            #[serde(with = "ipv6_prefix_str")]
+            prefix: Ipv6Prefix,
+            #[serde(flatten)]
+            range: Option<PrefixRangeV6>,
+        }
+
+        let raw = RawEntryV6::deserialize(deserializer)?;
+        let range = raw.range.filter(|r| r.ge.is_some() || r.le.is_some());
+
+        Ok(PrefixListEntryV6 {
+            sequence: raw.sequence,
+            action: raw.action,
+            prefix: raw.prefix,
+            range,
+        })
+    }
+}
+
+/// An IPv6 prefix list containing ordered entries.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PrefixListV6 {
+    pub name: String,
+    pub entries: Vec<PrefixListEntryV6>,
+}
+
+/// Conditions for a routing policy statement aligned with RFC 9067 (`ietf-routing-policy`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PolicyConditions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_prefix_set: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_prefix_set_v6: Option<String>,
+}
+
+/// Actions for a routing policy statement aligned with RFC 9067 (`ietf-routing-policy`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PolicyActions {
+    pub policy_result: PolicyAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set_metric: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set_local_preference: Option<u32>,
+}
+
+impl Default for PolicyActions {
+    fn default() -> Self {
+        Self {
+            policy_result: PolicyAction::Permit,
+            set_metric: None,
+            set_local_preference: None,
+        }
+    }
+}
+
+/// A statement/term in a routing policy definition aligned with RFC 9067 (`ietf-routing-policy`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PolicyStatement {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_default_conditions")]
+    pub conditions: PolicyConditions,
+    #[serde(default)]
+    pub actions: PolicyActions,
+}
+
+fn is_default_conditions(cond: &PolicyConditions) -> bool {
+    cond.match_prefix_set.is_none() && cond.match_prefix_set_v6.is_none()
+}
+
+/// A routing policy definition (route-map / policy-statement / route-policy) aligned with RFC 9067 (`ietf-routing-policy`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PolicyDefinition {
+    pub name: String,
+    pub statements: Vec<PolicyStatement>,
 }
 
 /// Unparsed or unsupported configuration line metadata.
@@ -580,6 +779,10 @@ pub struct DeviceConfig {
     pub static_routes_v6: Vec<Ipv6StaticRoute>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prefix_lists: Vec<PrefixList>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prefix_lists_v6: Vec<PrefixListV6>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policies: Vec<PolicyDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unparsed_lines: Vec<UnparsedLine>,
 }

@@ -45,6 +45,8 @@ fn make_basic_device() -> DeviceConfig {
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     }
 }
@@ -60,6 +62,8 @@ fn test_hostname_generation() {
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -112,6 +116,8 @@ fn test_static_routes_emission() {
         ],
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -145,6 +151,8 @@ fn test_bgp_emission() {
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 
@@ -200,6 +208,8 @@ fn test_emit_warnings_for_unsupported_features() {
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: vec![ir::UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
             line_number: 12,
@@ -222,7 +232,7 @@ fn test_emit_warnings_for_unsupported_features() {
 }
 
 #[test]
-fn test_prefix_lists_warning_emission() {
+fn test_prefix_lists_and_policy_emission() {
     let dev = DeviceConfig {
         hostname: "R_POLICY".to_string(),
         interfaces: Vec::new(),
@@ -237,18 +247,52 @@ fn test_prefix_lists_warning_emission() {
                 sequence: 10,
                 action: ir::PolicyAction::Permit,
                 prefix: "10.0.0.0/8".parse().unwrap(),
+                range: Some(ir::PrefixRange {
+                    ge: Some(ir::PrefixLength::new(16).unwrap()),
+                    le: Some(ir::PrefixLength::new(24).unwrap()),
+                }),
+            }],
+        }],
+        prefix_lists_v6: vec![ir::PrefixListV6 {
+            name: "TEST_PL_V6".to_string(),
+            entries: vec![ir::PrefixListEntryV6 {
+                sequence: 10,
+                action: ir::PolicyAction::Permit,
+                prefix: "2001:db8::/32".parse().unwrap(),
                 range: None,
+            }],
+        }],
+        policies: vec![ir::PolicyDefinition {
+            name: "POLICY_1".to_string(),
+            statements: vec![ir::PolicyStatement {
+                name: "10".to_string(),
+                conditions: ir::PolicyConditions {
+                    match_prefix_set: Some("TEST_PL".to_string()),
+                    match_prefix_set_v6: None,
+                },
+                actions: ir::PolicyActions {
+                    policy_result: ir::PolicyAction::Permit,
+                    set_metric: Some(50),
+                    set_local_preference: Some(150),
+                },
             }],
         }],
         unparsed_lines: Vec::new(),
     };
 
     let result = emit_zebra(&dev).unwrap();
-    assert_eq!(result.warnings.len(), 1);
-    assert_eq!(result.warnings[0].category, "prefix-list");
-    assert!(result.warnings[0]
-        .message
-        .contains("pending routing-policy schema integration"));
+    assert_eq!(result.warnings.len(), 0);
+    assert!(result.yaml.contains("prefix-set:"));
+    assert!(result.yaml.contains("name: TEST_PL"));
+    assert!(result.yaml.contains("prefix: 10.0.0.0/8"));
+    assert!(result.yaml.contains("ge: 16"));
+    assert!(result.yaml.contains("le: 24"));
+    assert!(result.yaml.contains("name: TEST_PL_V6"));
+    assert!(result.yaml.contains("prefix: 2001:db8::/32"));
+    assert!(result.yaml.contains("policy:"));
+    assert!(result.yaml.contains("name: POLICY_1"));
+    assert!(result.yaml.contains("set: 50"));
+    assert!(result.yaml.contains("set: 150"));
 }
 
 #[test]
@@ -290,6 +334,8 @@ fn test_ipv6_emission() {
             next_hop: "2001:db8:1::2".parse().unwrap(),
         }],
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 

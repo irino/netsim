@@ -194,3 +194,44 @@ router bgp 65001
     assert_eq!(bgp.networks_v6.len(), 1);
     assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
 }
+
+#[test]
+fn test_parse_iosxr_ipv6_prefix_set_and_route_policy() {
+    let cfg = r#"
+hostname iosxr-r1
+!
+prefix-set V6_PFX
+  2001:db8:1::/48,
+  2001:db8::/32 ge 48 le 64
+end-set
+!
+route-policy RPL-TEST
+  if destination in V6_PFX then
+    set med 100
+    set local-preference 200
+    pass
+  else
+    drop
+  endif
+end-policy
+!
+"#;
+    let dev = parse_iosxr_config(cfg, Some("iosxr.cfg"));
+    assert_eq!(dev.prefix_lists_v6.len(), 1);
+    assert_eq!(dev.prefix_lists_v6[0].name, "V6_PFX");
+    assert_eq!(dev.prefix_lists_v6[0].entries.len(), 2);
+    assert_eq!(dev.policies.len(), 1);
+    let pol = &dev.policies[0];
+    assert_eq!(pol.name, "RPL-TEST");
+    assert_eq!(pol.statements.len(), 2);
+    assert_eq!(
+        pol.statements[0].actions.policy_result,
+        ir::PolicyAction::Permit
+    );
+    assert_eq!(pol.statements[0].actions.set_metric, Some(100));
+    assert_eq!(pol.statements[0].actions.set_local_preference, Some(200));
+    assert_eq!(
+        pol.statements[1].actions.policy_result,
+        ir::PolicyAction::Deny
+    );
+}

@@ -38,6 +38,8 @@ fn test_zebra_golden() {
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
+        prefix_lists_v6: Vec::new(),
+        policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
 

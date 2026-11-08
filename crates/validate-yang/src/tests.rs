@@ -123,6 +123,8 @@ fn test_valid_device_with_bgp_and_static_routes() {
         }],
         static_routes_v6: Vec::new(),
         prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        policies: vec![],
         unparsed_lines: vec![],
     };
 
@@ -410,6 +412,47 @@ fn test_valid_routing_policy_prefix_sets_validation() {
                 }],
             },
         ],
+        prefix_lists_v6: vec![ir::PrefixListV6 {
+            name: "PL-V6".to_string(),
+            entries: vec![ir::PrefixListEntryV6 {
+                sequence: 10,
+                action: ir::PolicyAction::Permit,
+                prefix: "2001:db8::/32".parse().unwrap(),
+                range: Some(ir::PrefixRangeV6 {
+                    ge: Some(ir::Ipv6PrefixLength::new(48).unwrap()),
+                    le: Some(ir::Ipv6PrefixLength::new(64).unwrap()),
+                }),
+            }],
+        }],
+        policies: vec![ir::PolicyDefinition {
+            name: "POLICY-BGP".to_string(),
+            statements: vec![
+                ir::PolicyStatement {
+                    name: "10".to_string(),
+                    conditions: ir::PolicyConditions {
+                        match_prefix_set: Some("FILTER-BGP".to_string()),
+                        match_prefix_set_v6: None,
+                    },
+                    actions: ir::PolicyActions {
+                        policy_result: ir::PolicyAction::Permit,
+                        set_metric: Some(100),
+                        set_local_preference: Some(200),
+                    },
+                },
+                ir::PolicyStatement {
+                    name: "20".to_string(),
+                    conditions: ir::PolicyConditions {
+                        match_prefix_set: None,
+                        match_prefix_set_v6: Some("PL-V6".to_string()),
+                    },
+                    actions: ir::PolicyActions {
+                        policy_result: ir::PolicyAction::Deny,
+                        set_metric: None,
+                        set_local_preference: None,
+                    },
+                },
+            ],
+        }],
         unparsed_lines: vec![],
     };
 

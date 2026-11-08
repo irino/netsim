@@ -1,7 +1,9 @@
 use ir::{
     BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
-    Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
-    PrefixLength, PrefixList, PrefixListEntry, PrefixRange, StaticRoute, UnparsedLine,
+    Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength, Ipv6StaticRoute, Ospf6Process, OspfAreaId,
+    OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
+    PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
+    PrefixRangeV6, StaticRoute, UnparsedLine,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -21,6 +23,16 @@ struct ParsedOspfNetwork {
 }
 
 #[derive(Debug)]
+struct ParsedRouteMapClause {
+    name: String,
+    action: PolicyAction,
+    seq: u32,
+    match_prefix_set: Option<String>,
+    match_prefix_set_v6: Option<String>,
+    set_metric: Option<u32>,
+    set_local_preference: Option<u32>,
+}
+
 enum Context {
     Global,
     Interface(Interface),
@@ -40,6 +52,7 @@ enum Context {
         in_af_ipv4: bool,
         in_af_ipv6: bool,
     },
+    RouteMap(ParsedRouteMapClause),
 }
 
 fn mask_to_prefix_length(mask: Ipv4Addr) -> Result<PrefixLength, String> {
@@ -154,6 +167,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
     let mut prefix_list_seq_sets: BTreeMap<String, HashSet<u32>> = BTreeMap::new();
     let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
+    let mut prefix_lists_v6_map: BTreeMap<String, Vec<PrefixListEntryV6>> = BTreeMap::new();
+    let mut prefix_list_v6_seq_sets: BTreeMap<String, HashSet<u32>> = BTreeMap::new();
+    let mut prefix_list_v6_last_seq: BTreeMap<String, u32> = BTreeMap::new();
+    let mut route_maps: Vec<ParsedRouteMapClause> = Vec::new();
     let mut unparsed_lines = Vec::new();
 
     let mut ctx = Context::Global;
@@ -205,6 +222,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         neighbors_v6,
                         networks_v6,
                     });
+                }
+                Context::RouteMap(clause) => {
+                    route_maps.push(clause);
                 }
                 Context::Global => {}
             }
@@ -263,6 +283,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         networks_v6,
                     });
                 }
+                Context::RouteMap(clause) => {
+                    route_maps.push(clause);
+                }
                 Context::Global => {}
             }
             ctx = Context::Global;
@@ -298,6 +321,11 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         || line.starts_with("network ")
                         || line.starts_with("address-family ")
                         || line == "exit-address-family"
+                }
+                Context::RouteMap(..) => {
+                    line.starts_with("match ")
+                        || line.starts_with("set ")
+                        || line.starts_with("description ")
                 }
                 Context::Global => unreachable!(),
             };
@@ -340,6 +368,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             neighbors_v6,
                             networks_v6,
                         });
+                    }
+                    Context::RouteMap(clause) => {
+                        route_maps.push(clause);
                     }
                     Context::Global => {}
                 }
@@ -560,14 +591,247 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             reason: "malformed ip route command".to_string(),
                         });
                     }
-                } else if line.starts_with("ipv6 prefix-list ") {
-                    unparsed_lines.push(UnparsedLine {
-                        file_path: filename.map(String::from),
-                        line_number: line_num,
-                        content: line.to_string(),
-                        reason: "IPv6 prefix-lists are outside current IPv4 milestone scope"
-                            .to_string(),
-                    });
+                } else if let Some(pl_tail) = line.strip_prefix("ipv6 prefix-list ") {
+                    let tokens: Vec<&str> = pl_tail.split_whitespace().collect();
+                    if tokens.is_empty() {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed ipv6 prefix-list command".to_string(),
+                        });
+                    } else {
+                        let name = tokens[0].to_string();
+                        prefix_lists_v6_map.entry(name.clone()).or_default();
+
+                        let rest_tokens = &tokens[1..];
+                        if rest_tokens.is_empty() {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "malformed ipv6 prefix-list command".to_string(),
+                            });
+                        } else if rest_tokens[0] == "description" {
+                            // description ignored
+                        } else {
+                            let mut cursor = 0;
+                            let mut explicit_seq = None;
+
+                            if rest_tokens.len() >= 2 && rest_tokens[cursor] == "seq" {
+                                if let Ok(s_num) = rest_tokens[cursor + 1].parse::<u32>() {
+                                    explicit_seq = Some(s_num);
+                                    cursor += 2;
+                                } else {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "invalid sequence number in prefix-list"
+                                            .to_string(),
+                                    });
+                                    continue;
+                                }
+                            }
+
+                            if cursor >= rest_tokens.len() {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "missing action in prefix-list command".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let action = match rest_tokens[cursor] {
+                                "permit" => Some(PolicyAction::Permit),
+                                "deny" => Some(PolicyAction::Deny),
+                                _ => None,
+                            };
+
+                            let action = match action {
+                                Some(a) => a,
+                                None => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: format!(
+                                            "unknown prefix-list action '{}'",
+                                            rest_tokens[cursor]
+                                        ),
+                                    });
+                                    continue;
+                                }
+                            };
+                            cursor += 1;
+
+                            if cursor >= rest_tokens.len() {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "missing prefix in prefix-list command".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let prefix_res = Ipv6Prefix::from_str(rest_tokens[cursor]);
+                            let prefix = match prefix_res {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: format!("invalid prefix '{}'", rest_tokens[cursor]),
+                                    });
+                                    continue;
+                                }
+                            };
+                            cursor += 1;
+
+                            let mut ge_val = None;
+                            let mut le_val = None;
+                            let mut parse_range_failed = false;
+
+                            while cursor < rest_tokens.len() {
+                                if rest_tokens[cursor] == "ge" && cursor + 1 < rest_tokens.len() {
+                                    if let Ok(v) = rest_tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(p_len) = Ipv6PrefixLength::new(v) {
+                                            ge_val = Some(p_len);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else if rest_tokens[cursor] == "le"
+                                    && cursor + 1 < rest_tokens.len()
+                                {
+                                    if let Ok(v) = rest_tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(p_len) = Ipv6PrefixLength::new(v) {
+                                            le_val = Some(p_len);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else {
+                                    parse_range_failed = true;
+                                    break;
+                                }
+                            }
+
+                            if parse_range_failed {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "malformed prefix-list range parameters".to_string(),
+                                });
+                                continue;
+                            }
+
+                            let range = if ge_val.is_some() || le_val.is_some() {
+                                let r = PrefixRangeV6 {
+                                    ge: ge_val,
+                                    le: le_val,
+                                };
+                                if r.validate(prefix.prefix_length).is_err() {
+                                    unparsed_lines.push(UnparsedLine {
+                                        file_path: filename.map(String::from),
+                                        line_number: line_num,
+                                        content: line.to_string(),
+                                        reason: "invalid prefix-list length range: len <= ge <= le"
+                                            .to_string(),
+                                    });
+                                    continue;
+                                }
+                                Some(r)
+                            } else {
+                                None
+                            };
+
+                            let seq_num = match explicit_seq {
+                                Some(s) => s,
+                                None => {
+                                    let next_seq = match prefix_list_v6_last_seq.get(&name) {
+                                        Some(&last) => (last / 5 + 1) * 5,
+                                        None => 5,
+                                    };
+                                    next_seq
+                                }
+                            };
+
+                            let seq_set = prefix_list_v6_seq_sets.entry(name.clone()).or_default();
+                            if seq_set.contains(&seq_num) {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: format!(
+                                        "duplicate sequence number {} in prefix-list {}",
+                                        seq_num, name
+                                    ),
+                                });
+                                continue;
+                            }
+                            seq_set.insert(seq_num);
+                            prefix_list_v6_last_seq.insert(name.clone(), seq_num);
+
+                            prefix_lists_v6_map
+                                .entry(name)
+                                .or_default()
+                                .push(PrefixListEntryV6 {
+                                    sequence: seq_num,
+                                    action,
+                                    prefix,
+                                    range,
+                                });
+                        }
+                    }
+                } else if let Some(rm_tail) = line.strip_prefix("route-map ") {
+                    let tokens: Vec<&str> = rm_tail.split_whitespace().collect();
+                    if tokens.is_empty() {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "malformed route-map command".to_string(),
+                        });
+                    } else {
+                        let name = tokens[0].to_string();
+                        let mut action = PolicyAction::Permit;
+                        let mut seq_num = 10;
+                        if tokens.len() >= 2 {
+                            match tokens[1] {
+                                "permit" => action = PolicyAction::Permit,
+                                "deny" => action = PolicyAction::Deny,
+                                other => {
+                                    if let Ok(num) = other.parse::<u32>() {
+                                        seq_num = num;
+                                    }
+                                }
+                            }
+                        }
+                        if tokens.len() >= 3 {
+                            if let Ok(num) = tokens[2].parse::<u32>() {
+                                seq_num = num;
+                            }
+                        }
+                        ctx = Context::RouteMap(ParsedRouteMapClause {
+                            name,
+                            action,
+                            seq: seq_num,
+                            match_prefix_set: None,
+                            match_prefix_set_v6: None,
+                            set_metric: None,
+                            set_local_preference: None,
+                        });
+                    }
                 } else if let Some(pl_tail) = line.strip_prefix("ip prefix-list ") {
                     let tokens: Vec<&str> = pl_tail.split_whitespace().collect();
                     if tokens.is_empty() {
@@ -776,6 +1040,46 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         line_number: line_num,
                         content: line.to_string(),
                         reason: "unsupported or unrecognized global command".to_string(),
+                    });
+                }
+            }
+            Context::RouteMap(ref mut clause) => {
+                if let Some(stripped) = line.strip_prefix("match ip address prefix-list ") {
+                    clause.match_prefix_set = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("match ipv6 address prefix-list ")
+                {
+                    clause.match_prefix_set_v6 = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("set metric ") {
+                    if let Ok(val) = stripped.trim().parse::<u32>() {
+                        clause.set_metric = Some(val);
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "invalid metric value in set metric".to_string(),
+                        });
+                    }
+                } else if let Some(stripped) = line.strip_prefix("set local-preference ") {
+                    if let Ok(val) = stripped.trim().parse::<u32>() {
+                        clause.set_local_preference = Some(val);
+                    } else {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "invalid local-preference value in set local-preference"
+                                .to_string(),
+                        });
+                    }
+                } else if line.starts_with("description ") {
+                    // description ignored
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "unsupported or unrecognized route-map command".to_string(),
                     });
                 }
             }
@@ -1288,6 +1592,9 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 networks_v6,
             });
         }
+        Context::RouteMap(clause) => {
+            route_maps.push(clause);
+        }
         Context::Global => {}
     }
 
@@ -1314,6 +1621,41 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         prefix_lists.push(PrefixList { name, entries });
     }
 
+    let mut prefix_lists_v6 = Vec::new();
+    for (name, mut entries) in prefix_lists_v6_map {
+        entries.sort_by_key(|e: &PrefixListEntryV6| e.sequence);
+        prefix_lists_v6.push(PrefixListV6 { name, entries });
+    }
+
+    // Finalize route-maps into policies
+    let mut policy_map: BTreeMap<String, Vec<ParsedRouteMapClause>> = BTreeMap::new();
+    for clause in route_maps {
+        policy_map
+            .entry(clause.name.clone())
+            .or_default()
+            .push(clause);
+    }
+    let mut policies = Vec::new();
+    for (name, mut clauses) in policy_map {
+        clauses.sort_by_key(|c| c.seq);
+        let mut statements = Vec::new();
+        for clause in clauses {
+            statements.push(PolicyStatement {
+                name: clause.seq.to_string(),
+                conditions: PolicyConditions {
+                    match_prefix_set: clause.match_prefix_set,
+                    match_prefix_set_v6: clause.match_prefix_set_v6,
+                },
+                actions: PolicyActions {
+                    policy_result: clause.action,
+                    set_metric: clause.set_metric,
+                    set_local_preference: clause.set_local_preference,
+                },
+            });
+        }
+        policies.push(PolicyDefinition { name, statements });
+    }
+
     DeviceConfig {
         hostname,
         interfaces,
@@ -1323,6 +1665,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         static_routes,
         static_routes_v6,
         prefix_lists,
+        prefix_lists_v6,
+        policies,
         unparsed_lines,
     }
 }

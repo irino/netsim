@@ -1,7 +1,18 @@
+#[derive(Debug, Default, Clone)]
+struct JunosTerm {
+    name: String,
+    match_prefix_set: Option<String>,
+    match_prefix_set_v6: Option<String>,
+    action: Option<PolicyAction>,
+    set_metric: Option<u32>,
+    set_local_preference: Option<u32>,
+}
+
 use ir::{
     BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
     Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
-    PrefixList, PrefixListEntry, StaticRoute, UnparsedLine,
+    PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement, PrefixList,
+    PrefixListEntry, PrefixListEntryV6, PrefixListV6, StaticRoute, UnparsedLine,
 };
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -125,6 +136,10 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut static_routes_v6 = Vec::new();
     let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
     let mut prefix_list_last_seq: BTreeMap<String, u32> = BTreeMap::new();
+    let mut prefix_lists_v6_map: BTreeMap<String, Vec<PrefixListEntryV6>> = BTreeMap::new();
+    let mut prefix_list_v6_last_seq: BTreeMap<String, u32> = BTreeMap::new();
+    let mut policy_statements: BTreeMap<String, BTreeMap<String, JunosTerm>> = BTreeMap::new();
+    let mut policy_term_orders: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unparsed_lines = Vec::new();
 
     for (idx, raw_line) in input.lines().enumerate() {
@@ -687,9 +702,11 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             continue;
         }
 
-        // 6. Policy options for prefix-list and BGP network announcement:
+        // 6. Policy options for prefix-list and BGP network announcement and policy-statements:
         // set policy-options prefix-list <name> <prefix>
         // set policy-options policy-statement ... term ... from route-filter <ip/prefix> exact
+        // set policy-options policy-statement ... term ... from prefix-list <pl>
+        // set policy-options policy-statement ... term ... then accept/reject
         if let Some(stripped) = cmd.strip_prefix("policy-options ") {
             let rest_po = stripped.trim();
             if let Some(stripped_pl) = rest_po.strip_prefix("prefix-list ") {
@@ -697,29 +714,43 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 if pl_tokens.len() >= 2 {
                     let pl_name = pl_tokens[0].to_string();
                     let mut s = pl_tokens[1];
-                    match parse_ipv4_prefix.parse_next(&mut s) {
-                        Ok(prefix) => {
-                            let next_seq = match prefix_list_last_seq.get(&pl_name) {
+                    if let Ok(prefix) = parse_ipv4_prefix.parse_next(&mut s) {
+                        let next_seq = match prefix_list_last_seq.get(&pl_name) {
+                            Some(&last) => last + 5,
+                            None => 5,
+                        };
+                        prefix_list_last_seq.insert(pl_name.clone(), next_seq);
+                        prefix_lists_map
+                            .entry(pl_name)
+                            .or_default()
+                            .push(PrefixListEntry {
+                                sequence: next_seq,
+                                action: PolicyAction::Permit,
+                                prefix,
+                                range: None,
+                            });
+                    } else {
+                        let mut s_v6 = pl_tokens[1];
+                        if let Ok(prefix_v6) = parse_ipv6_prefix.parse_next(&mut s_v6) {
+                            let next_seq = match prefix_list_v6_last_seq.get(&pl_name) {
                                 Some(&last) => last + 5,
                                 None => 5,
                             };
-                            prefix_list_last_seq.insert(pl_name.clone(), next_seq);
-                            prefix_lists_map
-                                .entry(pl_name)
-                                .or_default()
-                                .push(PrefixListEntry {
+                            prefix_list_v6_last_seq.insert(pl_name.clone(), next_seq);
+                            prefix_lists_v6_map.entry(pl_name).or_default().push(
+                                PrefixListEntryV6 {
                                     sequence: next_seq,
                                     action: PolicyAction::Permit,
-                                    prefix,
+                                    prefix: prefix_v6,
                                     range: None,
-                                });
-                        }
-                        Err(_) => {
+                                },
+                            );
+                        } else {
                             unparsed_lines.push(UnparsedLine {
                                 file_path: filename.map(String::from),
                                 line_number: line_num,
                                 content: line.to_string(),
-                                reason: "invalid prefix-list IPv4 prefix".to_string(),
+                                reason: "invalid prefix-list IP prefix".to_string(),
                             });
                         }
                     }
@@ -731,28 +762,98 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         reason: "malformed prefix-list statement".to_string(),
                     });
                 }
-            } else {
-                let tokens: Vec<&str> = rest_po.split_whitespace().collect();
-                // Look for route-filter <prefix>
-                let mut matched = false;
-                for (t_idx, token) in tokens.iter().enumerate() {
-                    if *token == "route-filter" && t_idx + 1 < tokens.len() {
-                        let mut s = tokens[t_idx + 1];
-                        if let Ok(prefix) = parse_ipv4_prefix.parse_next(&mut s) {
-                            bgp_networks.push(prefix);
-                            matched = true;
-                            break;
-                        }
+            } else if let Some(stripped_ps) = rest_po.strip_prefix("policy-statement ") {
+                let tokens: Vec<&str> = stripped_ps.split_whitespace().collect();
+                if tokens.len() >= 2 {
+                    let ps_name = tokens[0].to_string();
+                    let mut term_name = "default".to_string();
+                    let mut cursor = 1;
+
+                    if tokens[cursor] == "term" && cursor + 1 < tokens.len() {
+                        term_name = tokens[cursor + 1].to_string();
+                        cursor += 2;
                     }
-                }
-                if !matched {
+
+                    let term_order = policy_term_orders.entry(ps_name.clone()).or_default();
+                    if !term_order.contains(&term_name) {
+                        term_order.push(term_name.clone());
+                    }
+
+                    let term_map = policy_statements.entry(ps_name.clone()).or_default();
+                    let term = term_map
+                        .entry(term_name.clone())
+                        .or_insert_with(|| JunosTerm {
+                            name: term_name.clone(),
+                            ..Default::default()
+                        });
+
+                    // Parse remaining tokens: from / then
+                    let mut matched = false;
+                    while cursor < tokens.len() {
+                        if tokens[cursor] == "from" && cursor + 1 < tokens.len() {
+                            cursor += 1;
+                            if tokens[cursor] == "route-filter" && cursor + 1 < tokens.len() {
+                                let mut s = tokens[cursor + 1];
+                                if let Ok(prefix) = parse_ipv4_prefix.parse_next(&mut s) {
+                                    bgp_networks.push(prefix);
+                                    matched = true;
+                                }
+                                cursor += 1;
+                            } else if tokens[cursor] == "prefix-list" && cursor + 1 < tokens.len() {
+                                term.match_prefix_set = Some(tokens[cursor + 1].to_string());
+                                cursor += 1;
+                                matched = true;
+                            }
+                        } else if tokens[cursor] == "then" && cursor + 1 < tokens.len() {
+                            cursor += 1;
+                            if tokens[cursor] == "accept" {
+                                term.action = Some(PolicyAction::Permit);
+                                matched = true;
+                            } else if tokens[cursor] == "reject" {
+                                term.action = Some(PolicyAction::Deny);
+                                matched = true;
+                            } else if tokens[cursor] == "metric" && cursor + 1 < tokens.len() {
+                                if let Ok(m) = tokens[cursor + 1].parse::<u32>() {
+                                    term.set_metric = Some(m);
+                                }
+                                cursor += 1;
+                                matched = true;
+                            } else if tokens[cursor] == "local-preference"
+                                && cursor + 1 < tokens.len()
+                            {
+                                if let Ok(lp) = tokens[cursor + 1].parse::<u32>() {
+                                    term.set_local_preference = Some(lp);
+                                }
+                                cursor += 1;
+                                matched = true;
+                            }
+                        }
+                        cursor += 1;
+                    }
+
+                    if !matched {
+                        unparsed_lines.push(UnparsedLine {
+                            file_path: filename.map(String::from),
+                            line_number: line_num,
+                            content: line.to_string(),
+                            reason: "unsupported policy-statement clause".to_string(),
+                        });
+                    }
+                } else {
                     unparsed_lines.push(UnparsedLine {
                         file_path: filename.map(String::from),
                         line_number: line_num,
                         content: line.to_string(),
-                        reason: "unsupported policy-options command".to_string(),
+                        reason: "malformed policy-statement command".to_string(),
                     });
                 }
+            } else {
+                unparsed_lines.push(UnparsedLine {
+                    file_path: filename.map(String::from),
+                    line_number: line_num,
+                    content: line.to_string(),
+                    reason: "unsupported policy-options command".to_string(),
+                });
             }
             continue;
         }
@@ -935,6 +1036,40 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         prefix_lists.push(PrefixList { name, entries });
     }
 
+    let mut prefix_lists_v6 = Vec::new();
+    for (name, mut entries) in prefix_lists_v6_map {
+        entries.sort_by_key(|e: &PrefixListEntryV6| e.sequence);
+        prefix_lists_v6.push(PrefixListV6 { name, entries });
+    }
+
+    // Finalize policies
+    let mut policies = Vec::new();
+    for (ps_name, term_order) in policy_term_orders {
+        if let Some(terms) = policy_statements.get(&ps_name) {
+            let mut statements = Vec::new();
+            for t_name in term_order {
+                if let Some(term) = terms.get(&t_name) {
+                    statements.push(PolicyStatement {
+                        name: term.name.clone(),
+                        conditions: PolicyConditions {
+                            match_prefix_set: term.match_prefix_set.clone(),
+                            match_prefix_set_v6: term.match_prefix_set_v6.clone(),
+                        },
+                        actions: PolicyActions {
+                            policy_result: term.action.unwrap_or(PolicyAction::Permit),
+                            set_metric: term.set_metric,
+                            set_local_preference: term.set_local_preference,
+                        },
+                    });
+                }
+            }
+            policies.push(PolicyDefinition {
+                name: ps_name,
+                statements,
+            });
+        }
+    }
+
     DeviceConfig {
         hostname,
         interfaces,
@@ -944,6 +1079,8 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         static_routes,
         static_routes_v6,
         prefix_lists,
+        prefix_lists_v6,
+        policies,
         unparsed_lines,
     }
 }

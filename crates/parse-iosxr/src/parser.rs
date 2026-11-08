@@ -1,7 +1,9 @@
 use ir::{
     BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
-    Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
-    PrefixLength, PrefixList, PrefixListEntry, PrefixRange, StaticRoute, UnparsedLine,
+    Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength, Ipv6StaticRoute, Ospf6Process, OspfAreaId,
+    OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
+    PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
+    PrefixRangeV6, StaticRoute, UnparsedLine,
 };
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -18,7 +20,16 @@ struct RawOspfInterface {
     passive: Option<bool>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+struct ParsedRpl {
+    name: String,
+    statements: Vec<PolicyStatement>,
+    current_match_ps: Option<String>,
+    current_match_ps_v6: Option<String>,
+    current_med: Option<u32>,
+    current_lp: Option<u32>,
+}
+
 enum Context {
     Global,
     Interface(Interface),
@@ -55,7 +66,9 @@ enum Context {
     PrefixSet {
         name: String,
         entries: Vec<PrefixListEntry>,
+        entries_v6: Vec<PrefixListEntryV6>,
     },
+    RoutePolicy(ParsedRpl),
 }
 
 fn mask_to_prefix_length(mask: Ipv4Addr) -> Result<PrefixLength, String> {
@@ -161,6 +174,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut static_routes: Vec<StaticRoute> = Vec::new();
     let mut static_routes_v6: Vec<Ipv6StaticRoute> = Vec::new();
     let mut prefix_lists: Vec<PrefixList> = Vec::new();
+    let mut prefix_lists_v6: Vec<PrefixListV6> = Vec::new();
+    let mut policies: Vec<PolicyDefinition> = Vec::new();
     let mut unparsed_lines: Vec<UnparsedLine> = Vec::new();
 
     let mut ctx = Context::Global;
@@ -173,7 +188,9 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
          ospfv3_process: &mut Option<Ospf6Process>,
          ospfv3_areas_map: &mut BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>>,
          bgp_process: &mut Option<BgpProcess>,
-         prefix_lists: &mut Vec<PrefixList>| {
+         prefix_lists: &mut Vec<PrefixList>,
+         prefix_lists_v6: &mut Vec<PrefixListV6>,
+         policies: &mut Vec<PolicyDefinition>| {
             match ctx {
                 Context::Interface(iface) => {
                     interfaces.push(iface.clone());
@@ -267,10 +284,48 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                 }
                 Context::Static { .. } => {}
-                Context::PrefixSet { name, entries } => {
-                    prefix_lists.push(PrefixList {
-                        name: name.clone(),
-                        entries: entries.clone(),
+                Context::PrefixSet {
+                    name,
+                    entries,
+                    entries_v6,
+                } => {
+                    if !entries.is_empty() {
+                        prefix_lists.push(PrefixList {
+                            name: name.clone(),
+                            entries: entries.clone(),
+                        });
+                    }
+                    if !entries_v6.is_empty() {
+                        prefix_lists_v6.push(PrefixListV6 {
+                            name: name.clone(),
+                            entries: entries_v6.clone(),
+                        });
+                    }
+                }
+                Context::RoutePolicy(rpl) => {
+                    let mut stmts = rpl.statements.clone();
+                    if stmts.is_empty()
+                        && (rpl.current_match_ps.is_some()
+                            || rpl.current_match_ps_v6.is_some()
+                            || rpl.current_med.is_some()
+                            || rpl.current_lp.is_some())
+                    {
+                        stmts.push(PolicyStatement {
+                            name: "10".to_string(),
+                            conditions: PolicyConditions {
+                                match_prefix_set: rpl.current_match_ps.clone(),
+                                match_prefix_set_v6: rpl.current_match_ps_v6.clone(),
+                            },
+                            actions: PolicyActions {
+                                policy_result: PolicyAction::Permit,
+                                set_metric: rpl.current_med,
+                                set_local_preference: rpl.current_lp,
+                            },
+                        });
+                    }
+                    policies.push(PolicyDefinition {
+                        name: rpl.name.clone(),
+                        statements: stmts,
                     });
                 }
                 Context::Global => {}
@@ -309,6 +364,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospfv3_areas_map,
                             &mut bgp_process,
                             &mut prefix_lists,
+                            &mut prefix_lists_v6,
+                            &mut policies,
                         );
                     }
                 }
@@ -331,6 +388,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospfv3_areas_map,
                             &mut bgp_process,
                             &mut prefix_lists,
+                            &mut prefix_lists_v6,
+                            &mut policies,
                         );
                     }
                 }
@@ -359,6 +418,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospfv3_areas_map,
                             &mut bgp_process,
                             &mut prefix_lists,
+                            &mut prefix_lists_v6,
+                            &mut policies,
                         );
                     }
                 }
@@ -380,11 +441,16 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospfv3_areas_map,
                             &mut bgp_process,
                             &mut prefix_lists,
+                            &mut prefix_lists_v6,
+                            &mut policies,
                         );
                     }
                 }
                 Context::PrefixSet { .. } => {
                     // Do not flush on '!' inside prefix-set; wait for end-set
+                }
+                Context::RoutePolicy(..) => {
+                    // Do not flush on '!' inside route-policy; wait for end-policy
                 }
                 _ => {
                     flush_context(
@@ -396,6 +462,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         &mut ospfv3_areas_map,
                         &mut bgp_process,
                         &mut prefix_lists,
+                        &mut prefix_lists_v6,
+                        &mut policies,
                     );
                 }
             }
@@ -403,10 +471,54 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
 
         if line == "end-set" {
-            if let Context::PrefixSet { name, entries } = &ctx {
-                prefix_lists.push(PrefixList {
-                    name: name.clone(),
-                    entries: entries.clone(),
+            if let Context::PrefixSet {
+                name,
+                entries,
+                entries_v6,
+            } = &ctx
+            {
+                if !entries.is_empty() {
+                    prefix_lists.push(PrefixList {
+                        name: name.clone(),
+                        entries: entries.clone(),
+                    });
+                }
+                if !entries_v6.is_empty() {
+                    prefix_lists_v6.push(PrefixListV6 {
+                        name: name.clone(),
+                        entries: entries_v6.clone(),
+                    });
+                }
+            }
+            ctx = Context::Global;
+            continue;
+        }
+
+        if line == "end-policy" {
+            if let Context::RoutePolicy(rpl) = &ctx {
+                let mut stmts = rpl.statements.clone();
+                if stmts.is_empty()
+                    && (rpl.current_match_ps.is_some()
+                        || rpl.current_match_ps_v6.is_some()
+                        || rpl.current_med.is_some()
+                        || rpl.current_lp.is_some())
+                {
+                    stmts.push(PolicyStatement {
+                        name: "10".to_string(),
+                        conditions: PolicyConditions {
+                            match_prefix_set: rpl.current_match_ps.clone(),
+                            match_prefix_set_v6: rpl.current_match_ps_v6.clone(),
+                        },
+                        actions: PolicyActions {
+                            policy_result: PolicyAction::Permit,
+                            set_metric: rpl.current_med,
+                            set_local_preference: rpl.current_lp,
+                        },
+                    });
+                }
+                policies.push(PolicyDefinition {
+                    name: rpl.name.clone(),
+                    statements: stmts,
                 });
             }
             ctx = Context::Global;
@@ -423,6 +535,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 &mut ospfv3_areas_map,
                 &mut bgp_process,
                 &mut prefix_lists,
+                &mut prefix_lists_v6,
+                &mut policies,
             );
             continue;
         }
@@ -448,6 +562,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     &mut ospfv3_areas_map,
                     &mut bgp_process,
                     &mut prefix_lists,
+                    &mut prefix_lists_v6,
+                    &mut policies,
                 );
             }
         }
@@ -594,7 +710,14 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     ctx = Context::PrefixSet {
                         name,
                         entries: Vec::new(),
+                        entries_v6: Vec::new(),
                     };
+                } else if let Some(stripped) = line.strip_prefix("route-policy ") {
+                    let name = stripped.trim().to_string();
+                    ctx = Context::RoutePolicy(ParsedRpl {
+                        name,
+                        ..Default::default()
+                    });
                 } else {
                     unparsed_lines.push(UnparsedLine {
                         file_path: filename.map(String::from),
@@ -1085,11 +1208,10 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 }
             }
             Context::PrefixSet {
-                ref mut entries, ..
+                ref mut entries,
+                ref mut entries_v6,
+                ..
             } => {
-                // Lines in prefix-set, e.g.:
-                // 10.0.0.0/8
-                // 10.0.0.0/8 ge 16 le 24,
                 let clean_entry = line.trim_end_matches(',');
                 let tokens: Vec<&str> = clean_entry.split_whitespace().collect();
                 if !tokens.is_empty() {
@@ -1164,13 +1286,169 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             });
                         }
                     } else {
-                        unparsed_lines.push(UnparsedLine {
-                            file_path: filename.map(String::from),
-                            line_number: line_num,
-                            content: line.to_string(),
-                            reason: "invalid prefix in prefix-set".to_string(),
-                        });
+                        let mut s_v6 = tokens[0];
+                        if let Ok(prefix) = parse_ipv6_prefix.parse_next(&mut s_v6) {
+                            let mut ge_val = None;
+                            let mut le_val = None;
+                            let mut cursor = 1;
+                            let mut parse_range_failed = false;
+
+                            while cursor < tokens.len() {
+                                if tokens[cursor] == "ge" && cursor + 1 < tokens.len() {
+                                    if let Ok(v) = tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(pl) = Ipv6PrefixLength::new(v) {
+                                            ge_val = Some(pl);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else if tokens[cursor] == "le" && cursor + 1 < tokens.len() {
+                                    if let Ok(v) = tokens[cursor + 1].parse::<u8>() {
+                                        if let Ok(pl) = Ipv6PrefixLength::new(v) {
+                                            le_val = Some(pl);
+                                            cursor += 2;
+                                            continue;
+                                        }
+                                    }
+                                    parse_range_failed = true;
+                                    break;
+                                } else {
+                                    parse_range_failed = true;
+                                    break;
+                                }
+                            }
+
+                            if parse_range_failed {
+                                unparsed_lines.push(UnparsedLine {
+                                    file_path: filename.map(String::from),
+                                    line_number: line_num,
+                                    content: line.to_string(),
+                                    reason: "malformed prefix-set range parameters".to_string(),
+                                });
+                            } else {
+                                let range = if ge_val.is_some() || le_val.is_some() {
+                                    let r = PrefixRangeV6 {
+                                        ge: ge_val,
+                                        le: le_val,
+                                    };
+                                    if r.validate(prefix.prefix_length).is_err() {
+                                        unparsed_lines.push(UnparsedLine {
+                                            file_path: filename.map(String::from),
+                                            line_number: line_num,
+                                            content: line.to_string(),
+                                            reason: "invalid prefix-set range: len <= ge <= le"
+                                                .to_string(),
+                                        });
+                                        continue;
+                                    }
+                                    Some(r)
+                                } else {
+                                    None
+                                };
+
+                                let seq_num = ((entries_v6.len() + 1) * 10) as u32;
+                                entries_v6.push(PrefixListEntryV6 {
+                                    sequence: seq_num,
+                                    action: PolicyAction::Permit,
+                                    prefix,
+                                    range,
+                                });
+                            }
+                        } else {
+                            unparsed_lines.push(UnparsedLine {
+                                file_path: filename.map(String::from),
+                                line_number: line_num,
+                                content: line.to_string(),
+                                reason: "invalid prefix in prefix-set".to_string(),
+                            });
+                        }
                     }
+                }
+            }
+            Context::RoutePolicy(ref mut rpl) => {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("if destination in ") {
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        let ps_name = parts[0].to_string();
+                        rpl.current_match_ps = Some(ps_name);
+                        if trimmed.contains("pass") || trimmed.contains("done") {
+                            let seq = ((rpl.statements.len() + 1) * 10) as u32;
+                            rpl.statements.push(PolicyStatement {
+                                name: seq.to_string(),
+                                conditions: PolicyConditions {
+                                    match_prefix_set: rpl.current_match_ps.take(),
+                                    match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                                },
+                                actions: PolicyActions {
+                                    policy_result: PolicyAction::Permit,
+                                    set_metric: rpl.current_med.take(),
+                                    set_local_preference: rpl.current_lp.take(),
+                                },
+                            });
+                        } else if trimmed.contains("drop") {
+                            let seq = ((rpl.statements.len() + 1) * 10) as u32;
+                            rpl.statements.push(PolicyStatement {
+                                name: seq.to_string(),
+                                conditions: PolicyConditions {
+                                    match_prefix_set: rpl.current_match_ps.take(),
+                                    match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                                },
+                                actions: PolicyActions {
+                                    policy_result: PolicyAction::Deny,
+                                    set_metric: rpl.current_med.take(),
+                                    set_local_preference: rpl.current_lp.take(),
+                                },
+                            });
+                        }
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("set med ") {
+                    if let Ok(v) = rest.trim().parse::<u32>() {
+                        rpl.current_med = Some(v);
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("set local-preference ") {
+                    if let Ok(v) = rest.trim().parse::<u32>() {
+                        rpl.current_lp = Some(v);
+                    }
+                } else if trimmed == "pass" || trimmed == "done" {
+                    let seq = ((rpl.statements.len() + 1) * 10) as u32;
+                    rpl.statements.push(PolicyStatement {
+                        name: seq.to_string(),
+                        conditions: PolicyConditions {
+                            match_prefix_set: rpl.current_match_ps.take(),
+                            match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                        },
+                        actions: PolicyActions {
+                            policy_result: PolicyAction::Permit,
+                            set_metric: rpl.current_med.take(),
+                            set_local_preference: rpl.current_lp.take(),
+                        },
+                    });
+                } else if trimmed == "drop" {
+                    let seq = ((rpl.statements.len() + 1) * 10) as u32;
+                    rpl.statements.push(PolicyStatement {
+                        name: seq.to_string(),
+                        conditions: PolicyConditions {
+                            match_prefix_set: rpl.current_match_ps.take(),
+                            match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                        },
+                        actions: PolicyActions {
+                            policy_result: PolicyAction::Deny,
+                            set_metric: rpl.current_med.take(),
+                            set_local_preference: rpl.current_lp.take(),
+                        },
+                    });
+                } else if trimmed == "endif" || trimmed == "else" {
+                    // control flow markers
+                } else {
+                    unparsed_lines.push(UnparsedLine {
+                        file_path: filename.map(String::from),
+                        line_number: line_num,
+                        content: line.to_string(),
+                        reason: "unsupported route-policy statement".to_string(),
+                    });
                 }
             }
         }
@@ -1186,6 +1464,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         &mut ospfv3_areas_map,
         &mut bgp_process,
         &mut prefix_lists,
+        &mut prefix_lists_v6,
+        &mut policies,
     );
 
     // Attach OSPF configuration to interfaces from ospf_areas_map
@@ -1221,6 +1501,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         static_routes,
         static_routes_v6,
         prefix_lists,
+        prefix_lists_v6,
+        policies,
         unparsed_lines,
     }
 }
