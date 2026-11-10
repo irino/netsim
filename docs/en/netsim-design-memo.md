@@ -206,7 +206,7 @@ Routing policies and prefix lists (both IPv4 and IPv6) are supported across the 
 - **Reachability Matrix & Intent Assertion**:
   - Allows specifying an `intent.yml` (e.g., `assert: ping r1 -> r5 loopback` or `route r1 has 10.0.0.0/24`) to validate operational intent.
 
-### Phase 3: IS-IS Protocol & Advanced Routing Knobs
+### Phase 3: IS-IS Protocol & Advanced Routing Knobs (Implemented)
 - **IS-IS Routing Protocol**:
   - Many service provider and modern data center topologies use IS-IS as the IGP instead of OSPF.
   - Add IS-IS models in `crates/ir` (`IsisProcess`, Level-1/Level-2, NET / ISO system ID, interface metrics).

@@ -1,6 +1,7 @@
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
-    Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength, Ipv6StaticRoute, Ospf6Process, OspfAreaId,
+    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
+    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
+    Ipv6PrefixLength, Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId,
     OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
     PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
     PrefixRangeV6, StaticRoute, UnparsedLine,
@@ -14,6 +15,24 @@ use winnow::token::{rest, take_while};
 use winnow::ModalResult as PResult;
 use winnow::Parser;
 
+#[derive(Default, Debug, Clone)]
+struct RawBgpPeer {
+    remote_as: u32,
+    peer_group: Option<String>,
+    route_reflector_client: Option<bool>,
+    cluster_id: Option<Ipv4Addr>,
+    send_community: Option<String>,
+    bfd: Option<bool>,
+}
+
+#[derive(Default, Debug, Clone)]
+struct RawIsisInterface {
+    metric: Option<u32>,
+    level: Option<IsisLevel>,
+    passive: Option<bool>,
+    bfd: Option<bool>,
+}
+
 #[derive(Default, Debug)]
 struct RawOspfInterface {
     cost: Option<u16>,
@@ -26,8 +45,10 @@ struct ParsedRpl {
     statements: Vec<PolicyStatement>,
     current_match_ps: Option<String>,
     current_match_ps_v6: Option<String>,
+    current_match_community: Option<String>,
     current_med: Option<u32>,
     current_lp: Option<u32>,
+    current_set_community: Option<String>,
 }
 
 enum Context {
@@ -47,16 +68,25 @@ enum Context {
         current_interface: Option<String>,
         areas: BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>>,
     },
+    Isis {
+        net: Option<String>,
+        level: Option<IsisLevel>,
+        current_interface: Option<String>,
+        interfaces: BTreeMap<String, RawIsisInterface>,
+    },
     Bgp {
         as_num: u32,
         router_id: Option<Ipv4Addr>,
+        cluster_id: Option<Ipv4Addr>,
         current_neighbor: Option<Ipv4Addr>,
         current_neighbor_v6: Option<Ipv6Addr>,
+        current_peer_group: Option<String>,
         in_af_ipv4: bool,
         in_af_ipv6: bool,
-        neighbors: BTreeMap<Ipv4Addr, u32>,
+        peer_groups: BTreeMap<String, BgpPeerGroup>,
+        neighbors: BTreeMap<Ipv4Addr, RawBgpPeer>,
         networks: Vec<Ipv4Prefix>,
-        neighbors_v6: BTreeMap<Ipv6Addr, u32>,
+        neighbors_v6: BTreeMap<Ipv6Addr, RawBgpPeer>,
         networks_v6: Vec<Ipv6Prefix>,
     },
     Static {
@@ -170,7 +200,10 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut ospfv3_process: Option<Ospf6Process> = None;
     let mut ospfv3_areas_map: BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>> =
         BTreeMap::new();
+    let mut isis_process: Option<IsisProcess> = None;
+    let mut isis_interfaces: BTreeMap<String, RawIsisInterface> = BTreeMap::new();
     let mut bgp_process: Option<BgpProcess> = None;
+    let community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut static_routes: Vec<StaticRoute> = Vec::new();
     let mut static_routes_v6: Vec<Ipv6StaticRoute> = Vec::new();
     let mut prefix_lists: Vec<PrefixList> = Vec::new();
@@ -187,6 +220,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
          ospf_areas_map: &mut BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>>,
          ospfv3_process: &mut Option<Ospf6Process>,
          ospfv3_areas_map: &mut BTreeMap<OspfAreaId, BTreeMap<String, RawOspfInterface>>,
+         isis_process: &mut Option<IsisProcess>,
+         isis_interfaces: &mut BTreeMap<String, RawIsisInterface>,
          bgp_process: &mut Option<BgpProcess>,
          prefix_lists: &mut Vec<PrefixList>,
          prefix_lists_v6: &mut Vec<PrefixListV6>,
@@ -241,9 +276,25 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         }
                     }
                 }
+                Context::Isis {
+                    net,
+                    level,
+                    interfaces: isis_ifs,
+                    ..
+                } => {
+                    *isis_process = Some(IsisProcess {
+                        net: net.clone(),
+                        level: *level,
+                        te_router_id: None,
+                    });
+                    isis_interfaces.extend(isis_ifs.clone());
+                }
+
                 Context::Bgp {
                     as_num,
                     router_id,
+                    cluster_id,
+                    peer_groups,
                     neighbors,
                     networks,
                     neighbors_v6,
@@ -251,10 +302,41 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     ..
                 } => {
                     let mut nbr_vec = Vec::new();
-                    for (addr, rem_as) in neighbors.iter() {
+                    for (addr, raw) in neighbors.iter() {
+                        let mut rem_as = raw.remote_as;
+                        let mut rr = raw.route_reflector_client;
+                        let mut cid = raw.cluster_id;
+                        let mut sc = raw.send_community.clone();
+                        let mut bfd = raw.bfd;
+
+                        if let Some(ref pg_name) = raw.peer_group {
+                            if let Some(pg) = peer_groups.get(pg_name) {
+                                if rem_as == 0 {
+                                    rem_as = pg.remote_as.unwrap_or(0);
+                                }
+                                if rr.is_none() {
+                                    rr = pg.route_reflector_client;
+                                }
+                                if cid.is_none() {
+                                    cid = pg.cluster_id;
+                                }
+                                if sc.is_none() {
+                                    sc = pg.send_community.clone();
+                                }
+                                if bfd.is_none() {
+                                    bfd = pg.bfd;
+                                }
+                            }
+                        }
+
                         nbr_vec.push(BgpNeighbor {
                             remote_address: *addr,
-                            remote_as: *rem_as,
+                            remote_as: rem_as,
+                            peer_group: raw.peer_group.clone(),
+                            route_reflector_client: rr,
+                            cluster_id: cid,
+                            send_community: sc,
+                            bfd,
                         });
                     }
                     nbr_vec.sort_by_key(|n| n.remote_address);
@@ -263,10 +345,41 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     nets.dedup();
 
                     let mut nbr_v6_vec = Vec::new();
-                    for (addr, rem_as) in neighbors_v6.iter() {
+                    for (addr, raw) in neighbors_v6.iter() {
+                        let mut rem_as = raw.remote_as;
+                        let mut rr = raw.route_reflector_client;
+                        let mut cid = raw.cluster_id;
+                        let mut sc = raw.send_community.clone();
+                        let mut bfd = raw.bfd;
+
+                        if let Some(ref pg_name) = raw.peer_group {
+                            if let Some(pg) = peer_groups.get(pg_name) {
+                                if rem_as == 0 {
+                                    rem_as = pg.remote_as.unwrap_or(0);
+                                }
+                                if rr.is_none() {
+                                    rr = pg.route_reflector_client;
+                                }
+                                if cid.is_none() {
+                                    cid = pg.cluster_id;
+                                }
+                                if sc.is_none() {
+                                    sc = pg.send_community.clone();
+                                }
+                                if bfd.is_none() {
+                                    bfd = pg.bfd;
+                                }
+                            }
+                        }
+
                         nbr_v6_vec.push(BgpNeighborV6 {
                             remote_address: *addr,
-                            remote_as: *rem_as,
+                            remote_as: rem_as,
+                            peer_group: raw.peer_group.clone(),
+                            route_reflector_client: rr,
+                            cluster_id: cid,
+                            send_community: sc,
+                            bfd,
                         });
                     }
                     nbr_v6_vec.sort_by_key(|n| n.remote_address);
@@ -277,6 +390,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     *bgp_process = Some(BgpProcess {
                         as_number: *as_num,
                         router_id: *router_id,
+                        cluster_id: *cluster_id,
+                        peer_groups: peer_groups.values().cloned().collect(),
                         neighbors: nbr_vec,
                         networks: nets,
                         neighbors_v6: nbr_v6_vec,
@@ -307,19 +422,23 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     if stmts.is_empty()
                         && (rpl.current_match_ps.is_some()
                             || rpl.current_match_ps_v6.is_some()
+                            || rpl.current_match_community.is_some()
                             || rpl.current_med.is_some()
-                            || rpl.current_lp.is_some())
+                            || rpl.current_lp.is_some()
+                            || rpl.current_set_community.is_some())
                     {
                         stmts.push(PolicyStatement {
                             name: "10".to_string(),
                             conditions: PolicyConditions {
                                 match_prefix_set: rpl.current_match_ps.clone(),
                                 match_prefix_set_v6: rpl.current_match_ps_v6.clone(),
+                                match_community: rpl.current_match_community.clone(),
                             },
                             actions: PolicyActions {
                                 policy_result: PolicyAction::Permit,
                                 set_metric: rpl.current_med,
                                 set_local_preference: rpl.current_lp,
+                                set_community: rpl.current_set_community.clone(),
                             },
                         });
                     }
@@ -362,6 +481,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospf_areas_map,
                             &mut ospfv3_process,
                             &mut ospfv3_areas_map,
+                            &mut isis_process,
+                            &mut isis_interfaces,
                             &mut bgp_process,
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
@@ -386,6 +507,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospf_areas_map,
                             &mut ospfv3_process,
                             &mut ospfv3_areas_map,
+                            &mut isis_process,
+                            &mut isis_interfaces,
                             &mut bgp_process,
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
@@ -393,14 +516,40 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         );
                     }
                 }
+                Context::Isis {
+                    current_interface, ..
+                } => {
+                    if current_interface.is_some() {
+                        *current_interface = None;
+                    } else {
+                        flush_context(
+                            &mut ctx,
+                            &mut interfaces,
+                            &mut ospf_process,
+                            &mut ospf_areas_map,
+                            &mut ospfv3_process,
+                            &mut ospfv3_areas_map,
+                            &mut isis_process,
+                            &mut isis_interfaces,
+                            &mut bgp_process,
+                            &mut prefix_lists,
+                            &mut prefix_lists_v6,
+                            &mut policies,
+                        );
+                    }
+                }
+
                 Context::Bgp {
                     current_neighbor,
                     current_neighbor_v6,
+                    current_peer_group,
                     in_af_ipv4,
                     in_af_ipv6,
                     ..
                 } => {
-                    if current_neighbor.is_some() {
+                    if current_peer_group.is_some() {
+                        *current_peer_group = None;
+                    } else if current_neighbor.is_some() {
                         *current_neighbor = None;
                     } else if current_neighbor_v6.is_some() {
                         *current_neighbor_v6 = None;
@@ -416,6 +565,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospf_areas_map,
                             &mut ospfv3_process,
                             &mut ospfv3_areas_map,
+                            &mut isis_process,
+                            &mut isis_interfaces,
                             &mut bgp_process,
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
@@ -439,6 +590,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut ospf_areas_map,
                             &mut ospfv3_process,
                             &mut ospfv3_areas_map,
+                            &mut isis_process,
+                            &mut isis_interfaces,
                             &mut bgp_process,
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
@@ -460,6 +613,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         &mut ospf_areas_map,
                         &mut ospfv3_process,
                         &mut ospfv3_areas_map,
+                        &mut isis_process,
+                        &mut isis_interfaces,
                         &mut bgp_process,
                         &mut prefix_lists,
                         &mut prefix_lists_v6,
@@ -508,11 +663,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         conditions: PolicyConditions {
                             match_prefix_set: rpl.current_match_ps.clone(),
                             match_prefix_set_v6: rpl.current_match_ps_v6.clone(),
+                            match_community: rpl.current_match_community.clone(),
                         },
                         actions: PolicyActions {
                             policy_result: PolicyAction::Permit,
                             set_metric: rpl.current_med,
                             set_local_preference: rpl.current_lp,
+                            set_community: rpl.current_set_community.clone(),
                         },
                     });
                 }
@@ -533,6 +690,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 &mut ospf_areas_map,
                 &mut ospfv3_process,
                 &mut ospfv3_areas_map,
+                &mut isis_process,
+                &mut isis_interfaces,
                 &mut bgp_process,
                 &mut prefix_lists,
                 &mut prefix_lists_v6,
@@ -560,6 +719,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     &mut ospf_areas_map,
                     &mut ospfv3_process,
                     &mut ospfv3_areas_map,
+                    &mut isis_process,
+                    &mut isis_interfaces,
                     &mut bgp_process,
                     &mut prefix_lists,
                     &mut prefix_lists_v6,
@@ -597,6 +758,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ipv6: None,
                             ospf: None,
                             ospfv3: None,
+                            isis: None,
                         });
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -635,6 +797,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             reason: "malformed router ospfv3 command".to_string(),
                         });
                     }
+                } else if line.starts_with("router isis") {
+                    ctx = Context::Isis {
+                        net: None,
+                        level: None,
+                        current_interface: None,
+                        interfaces: BTreeMap::new(),
+                    };
                 } else if line.starts_with("router ospf ") {
                     let mut s = line;
                     let parsed_pid: PResult<(&str, &str, &str)> =
@@ -675,10 +844,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ctx = Context::Bgp {
                                 as_num,
                                 router_id: None,
+                                cluster_id: None,
                                 current_neighbor: None,
                                 current_neighbor_v6: None,
+                                current_peer_group: None,
                                 in_af_ipv4: false,
                                 in_af_ipv6: false,
+                                peer_groups: BTreeMap::new(),
                                 neighbors: BTreeMap::new(),
                                 networks: Vec::new(),
                                 neighbors_v6: BTreeMap::new(),
@@ -1007,18 +1179,116 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                 }
             }
+            Context::Isis {
+                ref mut net,
+                ref mut level,
+                ref mut current_interface,
+                ref mut interfaces,
+            } => {
+                if let Some(stripped) = line.strip_prefix("net ") {
+                    *net = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("is-type ") {
+                    match stripped.trim() {
+                        "level-1" => *level = Some(IsisLevel::Level1),
+                        "level-2-only" | "level-2" => *level = Some(IsisLevel::Level2),
+                        "level-1-2" => *level = Some(IsisLevel::Level12),
+                        _ => {}
+                    }
+                } else if let Some(stripped) = line.strip_prefix("interface ") {
+                    let if_name = stripped.trim().to_string();
+                    *current_interface = Some(if_name.clone());
+                    interfaces.entry(if_name).or_default();
+                } else if line == "passive" {
+                    if let Some(ref if_name) = current_interface {
+                        interfaces.entry(if_name.clone()).or_default().passive = Some(true);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("metric ") {
+                    if let Ok(m) = stripped.trim().parse::<u32>() {
+                        if let Some(ref if_name) = current_interface {
+                            interfaces.entry(if_name.clone()).or_default().metric = Some(m);
+                        }
+                    }
+                } else if line.starts_with("point-to-point") || line.starts_with("circuit-type") {
+                    // Supported
+                } else if line.starts_with("bfd fast-detect") || line.starts_with("bfd") {
+                    if let Some(ref if_name) = current_interface {
+                        interfaces.entry(if_name.clone()).or_default().bfd = Some(true);
+                    }
+                }
+            }
             Context::Bgp {
                 ref mut router_id,
+                ref mut cluster_id,
                 ref mut current_neighbor,
                 ref mut current_neighbor_v6,
+                ref mut current_peer_group,
                 ref mut in_af_ipv4,
                 ref mut in_af_ipv6,
+                ref mut peer_groups,
                 ref mut neighbors,
                 ref mut networks,
                 ref mut neighbors_v6,
                 ref mut networks_v6,
                 ..
             } => {
+                if let Some(stripped) = line.strip_prefix("cluster-id ") {
+                    let mut s = stripped.trim();
+                    if let Ok(cid) = parse_ipv4.parse_next(&mut s) {
+                        *cluster_id = Some(cid);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("neighbor-group ") {
+                    let gname = stripped.trim().to_string();
+                    *current_peer_group = Some(gname.clone());
+                    *current_neighbor = None;
+                    *current_neighbor_v6 = None;
+                    peer_groups
+                        .entry(gname.clone())
+                        .or_insert_with(|| BgpPeerGroup {
+                            name: gname,
+                            ..Default::default()
+                        });
+                } else if let Some(stripped) = line.strip_prefix("use neighbor-group ") {
+                    let gname = stripped.trim().to_string();
+                    if let Some(ip) = current_neighbor {
+                        neighbors.entry(*ip).or_default().peer_group = Some(gname);
+                    } else if let Some(ip6) = current_neighbor_v6 {
+                        neighbors_v6.entry(*ip6).or_default().peer_group = Some(gname);
+                    }
+                } else if line.starts_with("route-reflector-client") {
+                    if let Some(ref pg_name) = current_peer_group {
+                        peer_groups
+                            .entry(pg_name.clone())
+                            .or_default()
+                            .route_reflector_client = Some(true);
+                    } else if let Some(ip) = current_neighbor {
+                        neighbors.entry(*ip).or_default().route_reflector_client = Some(true);
+                    } else if let Some(ip6) = current_neighbor_v6 {
+                        neighbors_v6.entry(*ip6).or_default().route_reflector_client = Some(true);
+                    }
+                } else if line.starts_with("send-community-ebgp")
+                    || line.starts_with("send-community")
+                {
+                    if let Some(ref pg_name) = current_peer_group {
+                        peer_groups
+                            .entry(pg_name.clone())
+                            .or_default()
+                            .send_community = Some("standard".to_string());
+                    } else if let Some(ip) = current_neighbor {
+                        neighbors.entry(*ip).or_default().send_community =
+                            Some("standard".to_string());
+                    } else if let Some(ip6) = current_neighbor_v6 {
+                        neighbors_v6.entry(*ip6).or_default().send_community =
+                            Some("standard".to_string());
+                    }
+                } else if line.starts_with("bfd fast-detect") || line.starts_with("bfd") {
+                    if let Some(ref pg_name) = current_peer_group {
+                        peer_groups.entry(pg_name.clone()).or_default().bfd = Some(true);
+                    } else if let Some(ip) = current_neighbor {
+                        neighbors.entry(*ip).or_default().bfd = Some(true);
+                    } else if let Some(ip6) = current_neighbor_v6 {
+                        neighbors_v6.entry(*ip6).or_default().bfd = Some(true);
+                    }
+                }
                 if line.starts_with("bgp router-id ") {
                     let mut s = line;
                     let parsed: PResult<(&str, &str, Ipv4Addr)> =
@@ -1048,13 +1318,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     if let Ok(ip) = parse_ipv4.parse_next(&mut s) {
                         *current_neighbor = Some(ip);
                         *current_neighbor_v6 = None;
-                        neighbors.entry(ip).or_insert(0);
+                        neighbors.entry(ip).or_default();
                     } else {
                         let mut s_v6 = stripped.trim();
                         if let Ok(ip6) = parse_ipv6.parse_next(&mut s_v6) {
                             *current_neighbor_v6 = Some(ip6);
                             *current_neighbor = None;
-                            neighbors_v6.entry(ip6).or_insert(0);
+                            neighbors_v6.entry(ip6).or_default();
                         } else {
                             unparsed_lines.push(UnparsedLine {
                                 file_path: filename.map(String::from),
@@ -1066,10 +1336,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     }
                 } else if let Some(stripped) = line.strip_prefix("remote-as ") {
                     if let Ok(rem_as) = stripped.trim().parse::<u32>() {
-                        if let Some(ref nbr_ip) = current_neighbor {
-                            neighbors.insert(*nbr_ip, rem_as);
+                        if let Some(ref pg_name) = current_peer_group {
+                            peer_groups.entry(pg_name.clone()).or_default().remote_as =
+                                Some(rem_as);
+                        } else if let Some(ref nbr_ip) = current_neighbor {
+                            neighbors.entry(*nbr_ip).or_default().remote_as = rem_as;
                         } else if let Some(ref nbr_ip6) = current_neighbor_v6 {
-                            neighbors_v6.insert(*nbr_ip6, rem_as);
+                            neighbors_v6.entry(*nbr_ip6).or_default().remote_as = rem_as;
                         }
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -1381,11 +1654,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 conditions: PolicyConditions {
                                     match_prefix_set: rpl.current_match_ps.take(),
                                     match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                                    match_community: rpl.current_match_community.take(),
                                 },
                                 actions: PolicyActions {
                                     policy_result: PolicyAction::Permit,
                                     set_metric: rpl.current_med.take(),
                                     set_local_preference: rpl.current_lp.take(),
+                                    set_community: rpl.current_set_community.take(),
                                 },
                             });
                         } else if trimmed.contains("drop") {
@@ -1395,15 +1670,36 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 conditions: PolicyConditions {
                                     match_prefix_set: rpl.current_match_ps.take(),
                                     match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                                    match_community: rpl.current_match_community.take(),
                                 },
                                 actions: PolicyActions {
                                     policy_result: PolicyAction::Deny,
                                     set_metric: rpl.current_med.take(),
                                     set_local_preference: rpl.current_lp.take(),
+                                    set_community: rpl.current_set_community.take(),
                                 },
                             });
                         }
                     }
+                } else if let Some(rest) = trimmed.strip_prefix("set community ") {
+                    rpl.current_set_community = Some(
+                        rest.trim()
+                            .trim_matches('(')
+                            .trim_matches(')')
+                            .trim()
+                            .to_string(),
+                    );
+                } else if let Some(rest) = trimmed
+                    .strip_prefix("if community matches-any ")
+                    .or_else(|| trimmed.strip_prefix("community matches-any "))
+                {
+                    let comm_name = rest
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    rpl.current_match_community = Some(comm_name);
                 } else if let Some(rest) = trimmed.strip_prefix("set med ") {
                     if let Ok(v) = rest.trim().parse::<u32>() {
                         rpl.current_med = Some(v);
@@ -1419,11 +1715,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         conditions: PolicyConditions {
                             match_prefix_set: rpl.current_match_ps.take(),
                             match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                            match_community: rpl.current_match_community.take(),
                         },
                         actions: PolicyActions {
                             policy_result: PolicyAction::Permit,
                             set_metric: rpl.current_med.take(),
                             set_local_preference: rpl.current_lp.take(),
+                            set_community: rpl.current_set_community.take(),
                         },
                     });
                 } else if trimmed == "drop" {
@@ -1433,11 +1731,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         conditions: PolicyConditions {
                             match_prefix_set: rpl.current_match_ps.take(),
                             match_prefix_set_v6: rpl.current_match_ps_v6.take(),
+                            match_community: rpl.current_match_community.take(),
                         },
                         actions: PolicyActions {
                             policy_result: PolicyAction::Deny,
                             set_metric: rpl.current_med.take(),
                             set_local_preference: rpl.current_lp.take(),
+                            set_community: rpl.current_set_community.take(),
                         },
                     });
                 } else if trimmed == "endif" || trimmed == "else" {
@@ -1462,11 +1762,24 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         &mut ospf_areas_map,
         &mut ospfv3_process,
         &mut ospfv3_areas_map,
+        &mut isis_process,
+        &mut isis_interfaces,
         &mut bgp_process,
         &mut prefix_lists,
         &mut prefix_lists_v6,
         &mut policies,
     );
+
+    for iface in &mut interfaces {
+        if let Some(isis_if) = isis_interfaces.get(&iface.name) {
+            iface.isis = Some(InterfaceIsisConfig {
+                level: isis_if.level,
+                metric: isis_if.metric,
+                passive: isis_if.passive,
+                bfd: isis_if.bfd,
+            });
+        }
+    }
 
     // Attach OSPF configuration to interfaces from ospf_areas_map
     for iface in &mut interfaces {
@@ -1476,6 +1789,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     area: area_id.clone(),
                     cost: raw_ospf.cost,
                     passive: raw_ospf.passive,
+                    bfd: None,
                 });
                 break;
             }
@@ -1486,10 +1800,16 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     area: area_id.clone(),
                     cost: raw_ospf.cost,
                     passive: raw_ospf.passive,
+                    bfd: None,
                 });
                 break;
             }
         }
+    }
+
+    let mut community_lists = Vec::new();
+    for (name, entries) in community_lists_map {
+        community_lists.push(CommunityList { name, entries });
     }
 
     DeviceConfig {
@@ -1497,11 +1817,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         interfaces,
         ospf: ospf_process,
         ospfv3: ospfv3_process,
+        isis: isis_process,
         bgp: bgp_process,
         static_routes,
         static_routes_v6,
         prefix_lists,
         prefix_lists_v6,
+        community_lists,
         policies,
         unparsed_lines,
     }

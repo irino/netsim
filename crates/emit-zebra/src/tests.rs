@@ -19,8 +19,10 @@ fn make_basic_device() -> DeviceConfig {
                     area: OspfAreaId::Number(0),
                     cost: Some(10),
                     passive: None,
+                    bfd: None,
                 }),
                 ospfv3: None,
+                isis: None,
             },
             Interface {
                 name: "enp0s7".to_string(),
@@ -32,8 +34,10 @@ fn make_basic_device() -> DeviceConfig {
                     area: OspfAreaId::Ipv4(Ipv4Addr::new(0, 0, 0, 1)),
                     cost: Some(20),
                     passive: Some(true),
+                    bfd: None,
                 }),
                 ospfv3: None,
+                isis: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -41,11 +45,13 @@ fn make_basic_device() -> DeviceConfig {
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
         }),
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     }
@@ -58,11 +64,13 @@ fn test_hostname_generation() {
         interfaces: Vec::new(),
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -103,6 +111,7 @@ fn test_static_routes_emission() {
         interfaces: Vec::new(),
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: vec![
             StaticRoute {
@@ -117,6 +126,7 @@ fn test_static_routes_emission() {
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -137,12 +147,20 @@ fn test_bgp_emission() {
         interfaces: Vec::new(),
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: Some(BgpProcess {
             as_number: 65001,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
+            cluster_id: None,
+            peer_groups: vec![],
             neighbors: vec![BgpNeighbor {
                 remote_address: Ipv4Addr::new(10, 0, 0, 2),
                 remote_as: 65002,
+                peer_group: None,
+                route_reflector_client: None,
+                cluster_id: None,
+                send_community: None,
+                bfd: None,
             }],
             networks: vec!["192.168.1.0/24".parse().unwrap()],
             neighbors_v6: Vec::new(),
@@ -152,6 +170,7 @@ fn test_bgp_emission() {
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -198,17 +217,20 @@ fn test_emit_warnings_for_unsupported_features() {
             ipv6: None,
             ospf: None,
             ospfv3: None,
+            isis: None,
         }],
         ospf: Some(OspfProcess {
             process_id: 10,
             router_id: None,
         }),
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: vec![ir::UnparsedLine {
             file_path: Some("R1.cfg".to_string()),
@@ -238,6 +260,7 @@ fn test_prefix_lists_and_policy_emission() {
         interfaces: Vec::new(),
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
@@ -262,6 +285,7 @@ fn test_prefix_lists_and_policy_emission() {
                 range: None,
             }],
         }],
+        community_lists: vec![],
         policies: vec![ir::PolicyDefinition {
             name: "POLICY_1".to_string(),
             statements: vec![ir::PolicyStatement {
@@ -269,11 +293,13 @@ fn test_prefix_lists_and_policy_emission() {
                 conditions: ir::PolicyConditions {
                     match_prefix_set: Some("TEST_PL".to_string()),
                     match_prefix_set_v6: None,
+                    match_community: None,
                 },
                 actions: ir::PolicyActions {
                     policy_result: ir::PolicyAction::Permit,
                     set_metric: Some(50),
                     set_local_preference: Some(150),
+                    set_community: None,
                 },
             }],
         }],
@@ -310,21 +336,31 @@ fn test_ipv6_emission() {
                 area: OspfAreaId::Number(0),
                 cost: Some(10),
                 passive: None,
+                bfd: None,
             }),
+            isis: None,
         }],
         ospf: None,
         ospfv3: Some(Ospf6Process {
             process_id: 1,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        isis: None,
         bgp: Some(BgpProcess {
             as_number: 65001,
             router_id: Some(Ipv4Addr::new(1, 1, 1, 1)),
+            cluster_id: None,
+            peer_groups: vec![],
             neighbors: Vec::new(),
             networks: Vec::new(),
             neighbors_v6: vec![BgpNeighborV6 {
                 remote_address: "2001:db8:1::2".parse().unwrap(),
                 remote_as: 65002,
+                peer_group: None,
+                route_reflector_client: None,
+                cluster_id: None,
+                send_community: None,
+                bfd: None,
             }],
             networks_v6: vec!["2001:db8:2::/64".parse().unwrap()],
         }),
@@ -335,6 +371,7 @@ fn test_ipv6_emission() {
         }],
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };
@@ -348,4 +385,132 @@ fn test_ipv6_emission() {
     assert!(yaml.contains("ospf6:"));
     assert!(yaml.contains("peer-address: 2001:db8:1::2"));
     assert!(yaml.contains("- 2001:db8:2::/64"));
+}
+
+#[test]
+fn test_isis_and_advanced_bgp_emission() {
+    let dev = DeviceConfig {
+        hostname: "router-advanced".to_string(),
+        interfaces: vec![
+            Interface {
+                name: "eth1".to_string(),
+                description: None,
+                enabled: true,
+                ipv4: Some("10.0.0.1/24".parse().unwrap()),
+                ipv6: None,
+                ospf: None,
+                ospfv3: None,
+                isis: Some(ir::InterfaceIsisConfig {
+                    level: Some(ir::IsisLevel::Level2),
+                    metric: Some(25),
+                    passive: None,
+                    bfd: Some(true),
+                }),
+            },
+            Interface {
+                name: "lo".to_string(),
+                description: None,
+                enabled: true,
+                ipv4: Some("1.1.1.1/32".parse().unwrap()),
+                ipv6: None,
+                ospf: None,
+                ospfv3: None,
+                isis: Some(ir::InterfaceIsisConfig {
+                    level: None,
+                    metric: None,
+                    passive: Some(true),
+                    bfd: None,
+                }),
+            },
+        ],
+        ospf: None,
+        ospfv3: None,
+        isis: Some(ir::IsisProcess {
+            net: Some("49.0001.0001.0001.0001.00".to_string()),
+            level: Some(ir::IsisLevel::Level2),
+            te_router_id: None,
+        }),
+        bgp: Some(ir::BgpProcess {
+            as_number: 65000,
+            router_id: Some("1.1.1.1".parse().unwrap()),
+            cluster_id: Some("1.1.1.1".parse().unwrap()),
+            peer_groups: vec![ir::BgpPeerGroup {
+                name: "SPINE_GRP".to_string(),
+                remote_as: Some(65000),
+                route_reflector_client: Some(true),
+                cluster_id: None,
+                send_community: Some("standard".to_string()),
+                bfd: Some(true),
+            }],
+            neighbors: vec![ir::BgpNeighbor {
+                remote_address: "10.0.0.2".parse().unwrap(),
+                remote_as: 65000,
+                peer_group: Some("SPINE_GRP".to_string()),
+                route_reflector_client: Some(true),
+                cluster_id: Some("1.1.1.1".parse().unwrap()),
+                send_community: Some("standard".to_string()),
+                bfd: Some(true),
+            }],
+            networks: vec![],
+            neighbors_v6: vec![],
+            networks_v6: vec![],
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![ir::CommunityList {
+            name: "COMM_TEST".to_string(),
+            entries: vec![ir::CommunityListEntry {
+                sequence: Some(10),
+                action: ir::PolicyAction::Permit,
+                communities: vec!["65000:100".to_string()],
+            }],
+        }],
+        policies: vec![ir::PolicyDefinition {
+            name: "POLICY_TEST".to_string(),
+            statements: vec![ir::PolicyStatement {
+                name: "10".to_string(),
+                conditions: ir::PolicyConditions {
+                    match_prefix_set: None,
+                    match_prefix_set_v6: None,
+                    match_community: Some("COMM_TEST".to_string()),
+                },
+                actions: ir::PolicyActions {
+                    policy_result: ir::PolicyAction::Permit,
+                    set_metric: None,
+                    set_local_preference: None,
+                    set_community: Some("65000:200".to_string()),
+                },
+            }],
+        }],
+        unparsed_lines: vec![],
+    };
+
+    let result = emit_zebra(&dev).unwrap();
+    assert_eq!(result.warnings.len(), 0);
+    // IS-IS assertions
+    assert!(result.yaml.contains("isis:"));
+    assert!(result.yaml.contains("net: 49.0001.0001.0001.0001.00"));
+    assert!(result.yaml.contains("is-type: level-2-only"));
+    assert!(result.yaml.contains("if-name: eth1"));
+    assert!(result.yaml.contains("metric: 25"));
+    assert!(result.yaml.contains("passive: true"));
+    assert!(result.yaml.contains("enabled: true"));
+
+    // BGP assertions
+    assert!(result.yaml.contains("cluster-id: 1.1.1.1"));
+    assert!(result.yaml.contains("neighbor-group:"));
+    assert!(result.yaml.contains("name: SPINE_GRP"));
+    assert!(result.yaml.contains("route-reflector:"));
+    assert!(result.yaml.contains("client: true"));
+    assert!(result.yaml.contains("send-community: standard"));
+
+    // Community-set & policy assertions
+    assert!(result.yaml.contains("community-set:"));
+    assert!(result.yaml.contains("name: COMM_TEST"));
+    assert!(result.yaml.contains("members:"));
+    assert!(result.yaml.contains("65000:100"));
+    assert!(result.yaml.contains("community: COMM_TEST"));
+    assert!(result.yaml.contains("community: 65000:200"));
 }

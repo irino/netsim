@@ -220,7 +220,7 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
 - **到達性マトリクスとインテント表明**:
   - `intent.yml`（例: `assert: ping r1 -> r5 loopback` や `route r1 has 10.0.0.0/24`）を指定できるようにし、ネットワークエミュレーションが運用上の意図（インテント）を満たしているかを自動検証。
 
-### Phase 3: IS-IS プロトコルと高度なルーティング機能
+### Phase 3: IS-IS プロトコルと高度なルーティング機能（実装済み）
 - **IS-IS ルーティングプロトコル**:
   - 多くのサービスプロバイダや現代のデータセンター網では、OSPF に代わり IS-IS が IGP として採用されています。
   - `crates/ir` への IS-IS モデル追加（`IsisProcess`, Level-1/Level-2, NET / ISO system ID, インターフェースメトリック）。

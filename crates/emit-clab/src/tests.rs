@@ -15,15 +15,18 @@ fn make_device(name: &str, ifaces: &[(&str, Option<&str>, bool)]) -> DeviceConfi
                 ipv6: None,
                 ospf: None,
                 ospfv3: None,
+                isis: None,
             })
             .collect(),
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     }

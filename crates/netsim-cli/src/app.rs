@@ -169,23 +169,16 @@ fn detect_and_parse_config(
         Some(v) => Err(CliError::UnsupportedVendor(v.to_string())),
         None => {
             // Auto-detect:
-            // 1. If extension is .set or non-empty lines start with 'set ', assume junos
-            let is_set_format = content
-                .lines()
-                .map(|l| l.trim())
-                .any(|l| l.starts_with("set "));
-
+            // 1. Check filename hints first
             let ext = filename
                 .and_then(|f| Path::new(f).extension())
                 .and_then(|s| s.to_str());
 
-            if ext == Some("set") || is_set_format {
-                return Ok(parse_junos_config(content, filename));
-            }
-
-            // 2. Check filename hints first
             if let Some(f) = filename {
                 let f_low = f.to_lowercase();
+                if ext == Some("set") || f_low.contains("junos") || f_low.contains("juniper") {
+                    return Ok(parse_junos_config(content, filename));
+                }
                 if f_low.contains("xr") || f_low.contains("iosxr") {
                     return Ok(parse_iosxr_config(content, filename));
                 }
@@ -195,6 +188,23 @@ fn detect_and_parse_config(
                 if f_low.contains("frr") || f_low.contains("sonic") {
                     return Ok(parse_frr_config(content, filename));
                 }
+                if f_low.contains("ios") || f_low.contains("cisco") {
+                    return Ok(parse_ios_config(content, filename));
+                }
+            }
+
+            // 2. If extension is .set or top-level unindented lines start with 'set ', assume junos
+            let is_set_format = content
+                .lines()
+                .filter(|l| {
+                    !l.trim().is_empty()
+                        && !l.trim().starts_with('#')
+                        && !l.trim().starts_with("/*")
+                })
+                .all(|l| l.starts_with("set "));
+
+            if ext == Some("set") || is_set_format {
+                return Ok(parse_junos_config(content, filename));
             }
 
             // 3. If content contains Cisco IOS XR signatures

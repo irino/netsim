@@ -3,14 +3,17 @@ struct JunosTerm {
     name: String,
     match_prefix_set: Option<String>,
     match_prefix_set_v6: Option<String>,
+    match_community: Option<String>,
     action: Option<PolicyAction>,
     set_metric: Option<u32>,
     set_local_preference: Option<u32>,
+    set_community: Option<String>,
 }
 
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
-    Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
+    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
+    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
+    Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
     PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement, PrefixList,
     PrefixListEntry, PrefixListEntryV6, PrefixListV6, StaticRoute, UnparsedLine,
 };
@@ -111,6 +114,11 @@ struct RawOspfInterface {
 #[derive(Default, Debug)]
 struct RawBgpNeighbor {
     peer_as: Option<u32>,
+    peer_group: Option<String>,
+    route_reflector_client: Option<bool>,
+    cluster_id: Option<Ipv4Addr>,
+    send_community: Option<String>,
+    bfd: Option<bool>,
 }
 
 /// Parse Junos set-format configuration into vendor-independent DeviceConfig IR.
@@ -126,8 +134,13 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
 
     let mut bgp_as: Option<u32> = None;
     let mut bgp_router_id: Option<Ipv4Addr> = None;
+    let mut bgp_cluster_id: Option<Ipv4Addr> = None;
+    let mut bgp_peer_groups: BTreeMap<String, BgpPeerGroup> = BTreeMap::new();
     let mut bgp_neighbors: BTreeMap<Ipv4Addr, RawBgpNeighbor> = BTreeMap::new();
     let mut bgp_neighbors_v6: BTreeMap<Ipv6Addr, RawBgpNeighbor> = BTreeMap::new();
+    let mut isis_process: Option<IsisProcess> = None;
+    let mut isis_interfaces: BTreeMap<String, InterfaceIsisConfig> = BTreeMap::new();
+    let mut community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut bgp_networks: Vec<Ipv4Prefix> = Vec::new();
     let mut bgp_networks_v6: Vec<Ipv6Prefix> = Vec::new();
     let mut has_bgp = false;
@@ -259,6 +272,14 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             });
                         }
                     }
+                } else if sub_tokens.len() >= 4
+                    && sub_tokens[0] == "family"
+                    && sub_tokens[1] == "iso"
+                    && sub_tokens[2] == "address"
+                {
+                    let net = sub_tokens[3].trim_matches('"').to_string();
+                    let proc = isis_process.get_or_insert_with(IsisProcess::default);
+                    proc.net = Some(net);
                 } else if sub_tokens.len() >= 4
                     && sub_tokens[0] == "family"
                     && sub_tokens[1] == "inet6"
@@ -519,6 +540,67 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             continue;
         }
 
+        // Protocols isis: set protocols isis ...
+        if let Some(stripped) = cmd.strip_prefix("protocols isis ") {
+            let proc = isis_process.get_or_insert_with(IsisProcess::default);
+            let rest_isis = stripped.trim();
+            let tokens: Vec<&str> = rest_isis.split_whitespace().collect();
+            if tokens.len() >= 2 && tokens[0] == "interface" {
+                let if_name = tokens[1].to_string();
+                let if_cfg = isis_interfaces.entry(if_name).or_default();
+                if tokens.len() >= 3 && tokens[2] == "passive" {
+                    if_cfg.passive = Some(true);
+                } else if tokens.len() >= 5
+                    && tokens[2] == "level"
+                    && (tokens[3] == "1" || tokens[3] == "2")
+                    && tokens[4] == "metric"
+                {
+                    if let Some(m_str) = tokens.get(5) {
+                        if let Ok(m) = m_str.parse::<u32>() {
+                            if_cfg.metric = Some(m);
+                            if tokens[3] == "1" {
+                                if_cfg.level = Some(IsisLevel::Level1);
+                            } else {
+                                if_cfg.level = Some(IsisLevel::Level2);
+                            }
+                        }
+                    }
+                } else if tokens.len() >= 4 && tokens[2] == "metric" {
+                    if let Ok(m) = tokens[3].parse::<u32>() {
+                        if_cfg.metric = Some(m);
+                    }
+                } else if tokens.len() >= 3
+                    && (tokens[2] == "bfd-liveness-detection" || tokens[2] == "bfd")
+                {
+                    if_cfg.bfd = Some(true);
+                }
+            } else if tokens.len() >= 3 && tokens[0] == "level" && tokens[2] == "disable" {
+                if tokens[1] == "1" {
+                    proc.level = Some(IsisLevel::Level2);
+                } else if tokens[1] == "2" {
+                    proc.level = Some(IsisLevel::Level1);
+                }
+            }
+            continue;
+        }
+
+        // Community set: set policy-options community <name> members <community>
+        if let Some(stripped) = cmd.strip_prefix("policy-options community ") {
+            let tokens: Vec<&str> = stripped.split_whitespace().collect();
+            if tokens.len() >= 3 && tokens[1] == "members" {
+                let name = tokens[0].to_string();
+                let val = tokens[2].trim_matches('"').to_string();
+                community_lists_map
+                    .entry(name)
+                    .or_default()
+                    .push(CommunityListEntry {
+                        sequence: None,
+                        action: PolicyAction::Permit,
+                        communities: vec![val],
+                    });
+            }
+            continue;
+        }
         // 4. Protocols OSPF:
         // set protocols ospf area <area> interface <name> ...
         if let Some(stripped) = cmd.strip_prefix("protocols ospf ") {
@@ -613,6 +695,58 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             let rest_bgp = stripped.trim();
 
             let tokens: Vec<&str> = rest_bgp.split_whitespace().collect();
+            if tokens.len() >= 2 && tokens[0] == "group" {
+                let gname = tokens[1].to_string();
+                let pg = bgp_peer_groups
+                    .entry(gname.clone())
+                    .or_insert_with(|| BgpPeerGroup {
+                        name: gname.clone(),
+                        ..Default::default()
+                    });
+                if tokens.len() >= 4 && tokens[2] == "peer-as" {
+                    if let Ok(pas) = tokens[3].parse::<u32>() {
+                        pg.remote_as = Some(pas);
+                    }
+                    continue;
+                } else if tokens.len() >= 3 && tokens[2] == "cluster" {
+                    if tokens.len() >= 4 {
+                        if let Ok(cid) = tokens[3].parse::<Ipv4Addr>() {
+                            pg.cluster_id = Some(cid);
+                            if bgp_cluster_id.is_none() {
+                                bgp_cluster_id = Some(cid);
+                            }
+                        }
+                    }
+                    pg.route_reflector_client = Some(true);
+                    continue;
+                } else if tokens.len() >= 3
+                    && (tokens[2] == "bfd-liveness-detection" || tokens[2] == "bfd")
+                {
+                    pg.bfd = Some(true);
+                    continue;
+                } else if tokens.len() >= 4 && tokens[2] == "neighbor" {
+                    let nbr_str = tokens[3];
+                    if let Ok(ip) = nbr_str.parse::<Ipv4Addr>() {
+                        let nbr = bgp_neighbors.entry(ip).or_default();
+                        nbr.peer_group = Some(gname);
+                        if tokens.len() >= 6 && tokens[4] == "peer-as" {
+                            if let Ok(pas) = tokens[5].parse::<u32>() {
+                                nbr.peer_as = Some(pas);
+                            }
+                        }
+                        continue;
+                    } else if let Ok(ip6) = nbr_str.parse::<Ipv6Addr>() {
+                        let nbr = bgp_neighbors_v6.entry(ip6).or_default();
+                        nbr.peer_group = Some(gname);
+                        if tokens.len() >= 6 && tokens[4] == "peer-as" {
+                            if let Ok(pas) = tokens[5].parse::<u32>() {
+                                nbr.peer_as = Some(pas);
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
             // Handle: group <group> neighbor <ip> peer-as <as>
             if tokens.len() >= 5 && tokens[0] == "group" && tokens[2] == "neighbor" {
                 let mut ip_s = tokens[3];
@@ -803,10 +937,23 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 term.match_prefix_set = Some(tokens[cursor + 1].to_string());
                                 cursor += 1;
                                 matched = true;
+                            } else if tokens[cursor] == "community" && cursor + 1 < tokens.len() {
+                                term.match_community =
+                                    Some(tokens[cursor + 1].trim_matches('"').to_string());
+                                cursor += 1;
+                                matched = true;
                             }
                         } else if tokens[cursor] == "then" && cursor + 1 < tokens.len() {
                             cursor += 1;
-                            if tokens[cursor] == "accept" {
+                            if tokens[cursor] == "community"
+                                && cursor + 2 < tokens.len()
+                                && (tokens[cursor + 1] == "set" || tokens[cursor + 1] == "add")
+                            {
+                                term.set_community =
+                                    Some(tokens[cursor + 2].trim_matches('"').to_string());
+                                cursor += 2;
+                                matched = true;
+                            } else if tokens[cursor] == "accept" {
                                 term.action = Some(PolicyAction::Permit);
                                 matched = true;
                             } else if tokens[cursor] == "reject" {
@@ -894,6 +1041,17 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
     }
 
+    for isis_if_name in isis_interfaces.keys() {
+        interfaces_map
+            .entry(isis_if_name.clone())
+            .or_insert_with(|| RawInterface {
+                name: isis_if_name.clone(),
+                description: None,
+                disable: false,
+                ipv4: None,
+                ipv6: None,
+            });
+    }
     let all_keys: Vec<String> = interfaces_map.keys().cloned().collect();
 
     // Filter out interface entries that are purely base containers with child units
@@ -929,6 +1087,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     area: area_id.clone(),
                     cost: ospf_opt.cost,
                     passive: ospf_opt.passive,
+                    bfd: None,
                 });
                 break;
             }
@@ -950,10 +1109,19 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     area: area_id.clone(),
                     cost: ospf_opt.cost,
                     passive: ospf_opt.passive,
+                    bfd: None,
                 });
                 break;
             }
         }
+
+        let iface_isis = isis_interfaces.get(&name).cloned().or_else(|| {
+            if let Some(base) = name.split('.').next() {
+                isis_interfaces.get(base).cloned()
+            } else {
+                None
+            }
+        });
 
         interfaces.push(Interface {
             name: raw_iface.name,
@@ -963,6 +1131,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             ipv6: raw_iface.ipv6,
             ospf: iface_ospf,
             ospfv3: iface_ospfv3,
+            isis: iface_isis,
         });
     }
 
@@ -989,13 +1158,48 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     };
 
     // Construct BgpProcess if BGP was configured
-    let bgp = if has_bgp || !bgp_neighbors.is_empty() || !bgp_neighbors_v6.is_empty() {
+    let bgp = if has_bgp
+        || !bgp_neighbors.is_empty()
+        || !bgp_neighbors_v6.is_empty()
+        || !bgp_peer_groups.is_empty()
+    {
         let mut neighbors = Vec::new();
         for (peer_addr, nbr_raw) in bgp_neighbors {
-            if let Some(peer_as) = nbr_raw.peer_as {
+            let mut peer_as = nbr_raw.peer_as;
+            let mut rr_client = nbr_raw.route_reflector_client;
+            let mut cid = nbr_raw.cluster_id;
+            let mut sc = nbr_raw.send_community;
+            let mut bfd = nbr_raw.bfd;
+
+            if let Some(ref pg_name) = nbr_raw.peer_group {
+                if let Some(pg) = bgp_peer_groups.get(pg_name) {
+                    if peer_as.is_none() {
+                        peer_as = pg.remote_as;
+                    }
+                    if rr_client.is_none() {
+                        rr_client = pg.route_reflector_client;
+                    }
+                    if cid.is_none() {
+                        cid = pg.cluster_id;
+                    }
+                    if sc.is_none() {
+                        sc = pg.send_community.clone();
+                    }
+                    if bfd.is_none() {
+                        bfd = pg.bfd;
+                    }
+                }
+            }
+
+            if let Some(pas) = peer_as {
                 neighbors.push(BgpNeighbor {
                     remote_address: peer_addr,
-                    remote_as: peer_as,
+                    remote_as: pas,
+                    peer_group: nbr_raw.peer_group,
+                    route_reflector_client: rr_client,
+                    cluster_id: cid,
+                    send_community: sc,
+                    bfd,
                 });
             }
         }
@@ -1003,10 +1207,41 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
 
         let mut neighbors_v6 = Vec::new();
         for (peer_addr, nbr_raw) in bgp_neighbors_v6 {
-            if let Some(peer_as) = nbr_raw.peer_as {
+            let mut peer_as = nbr_raw.peer_as;
+            let mut rr_client = nbr_raw.route_reflector_client;
+            let mut cid = nbr_raw.cluster_id;
+            let mut sc = nbr_raw.send_community;
+            let mut bfd = nbr_raw.bfd;
+
+            if let Some(ref pg_name) = nbr_raw.peer_group {
+                if let Some(pg) = bgp_peer_groups.get(pg_name) {
+                    if peer_as.is_none() {
+                        peer_as = pg.remote_as;
+                    }
+                    if rr_client.is_none() {
+                        rr_client = pg.route_reflector_client;
+                    }
+                    if cid.is_none() {
+                        cid = pg.cluster_id;
+                    }
+                    if sc.is_none() {
+                        sc = pg.send_community.clone();
+                    }
+                    if bfd.is_none() {
+                        bfd = pg.bfd;
+                    }
+                }
+            }
+
+            if let Some(pas) = peer_as {
                 neighbors_v6.push(BgpNeighborV6 {
                     remote_address: peer_addr,
-                    remote_as: peer_as,
+                    remote_as: pas,
+                    peer_group: nbr_raw.peer_group,
+                    route_reflector_client: rr_client,
+                    cluster_id: cid,
+                    send_community: sc,
+                    bfd,
                 });
             }
         }
@@ -1020,6 +1255,8 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         Some(BgpProcess {
             as_number: bgp_as.unwrap_or(0),
             router_id: bgp_router_id,
+            cluster_id: bgp_cluster_id,
+            peer_groups: bgp_peer_groups.into_values().collect(),
             neighbors,
             networks: bgp_networks,
             neighbors_v6,
@@ -1054,11 +1291,13 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         conditions: PolicyConditions {
                             match_prefix_set: term.match_prefix_set.clone(),
                             match_prefix_set_v6: term.match_prefix_set_v6.clone(),
+                            match_community: term.match_community.clone(),
                         },
                         actions: PolicyActions {
                             policy_result: term.action.unwrap_or(PolicyAction::Permit),
                             set_metric: term.set_metric,
                             set_local_preference: term.set_local_preference,
+                            set_community: term.set_community.clone(),
                         },
                     });
                 }
@@ -1070,16 +1309,23 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
     }
 
+    let mut community_lists = Vec::new();
+    for (name, entries) in community_lists_map {
+        community_lists.push(CommunityList { name, entries });
+    }
+
     DeviceConfig {
         hostname,
         interfaces,
         ospf,
         ospfv3,
+        isis: isis_process,
         bgp,
         static_routes,
         static_routes_v6,
         prefix_lists,
         prefix_lists_v6,
+        community_lists,
         policies,
         unparsed_lines,
     }
