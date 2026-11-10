@@ -235,3 +235,96 @@ end-policy
         ir::PolicyAction::Deny
     );
 }
+
+#[test]
+fn test_parse_iosxr_isis_and_advanced_bgp() {
+    let input = r#"
+hostname iosxr-test
+!
+interface GigabitEthernet0/0/0/0
+ ipv4 address 10.0.0.1 255.255.255.0
+!
+interface Loopback0
+ ipv4 address 1.1.1.1 255.255.255.255
+!
+router isis 100
+ is-type level-2-only
+ net 49.0001.0001.0001.0001.00
+ interface GigabitEthernet0/0/0/0
+  point-to-point
+  metric 18
+  bfd fast-detect
+ !
+ interface Loopback0
+  passive
+ !
+!
+route-policy RPL_COMM
+  if community matches-any COMM_SET then
+    set community (65000:700)
+    pass
+  endif
+end-policy
+!
+router bgp 65000
+ bgp router-id 1.1.1.1
+ cluster-id 1.1.1.1
+ neighbor-group SPINE_GRP
+  remote-as 65000
+  route-reflector-client
+  send-community-ebgp
+  bfd fast-detect
+ !
+ neighbor 10.0.0.2
+  use neighbor-group SPINE_GRP
+ !
+!
+"#;
+    let config = parse_iosxr_config(input, None);
+    assert_eq!(config.hostname, "iosxr-test");
+
+    // IS-IS
+    let isis = config.isis.expect("IS-IS process should exist");
+    assert_eq!(isis.net.as_deref(), Some("49.0001.0001.0001.0001.00"));
+    assert_eq!(isis.level, Some(ir::IsisLevel::Level2));
+
+    let eth = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "GigabitEthernet0/0/0/0")
+        .unwrap();
+    let isis_if = eth.isis.as_ref().unwrap();
+    assert_eq!(isis_if.metric, Some(18));
+    assert_eq!(isis_if.bfd, Some(true));
+
+    let lo = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Loopback0")
+        .unwrap();
+    assert_eq!(lo.isis.as_ref().unwrap().passive, Some(true));
+
+    // BGP
+    let bgp = config.bgp.expect("BGP process should exist");
+    assert_eq!(bgp.cluster_id, Some("1.1.1.1".parse().unwrap()));
+    assert_eq!(bgp.peer_groups.len(), 1);
+    let pg = &bgp.peer_groups[0];
+    assert_eq!(pg.name, "SPINE_GRP");
+    assert_eq!(pg.remote_as, Some(65000));
+    assert_eq!(pg.route_reflector_client, Some(true));
+    assert_eq!(pg.send_community.as_deref(), Some("standard"));
+    assert_eq!(pg.bfd, Some(true));
+
+    assert_eq!(bgp.neighbors.len(), 1);
+    let nbr = &bgp.neighbors[0];
+    assert_eq!(nbr.peer_group.as_deref(), Some("SPINE_GRP"));
+    assert_eq!(nbr.remote_as, 65000);
+    assert_eq!(nbr.route_reflector_client, Some(true));
+    assert_eq!(nbr.bfd, Some(true));
+
+    // RPL community
+    assert_eq!(config.policies.len(), 1);
+    let stmt = &config.policies[0].statements[0];
+    assert_eq!(stmt.conditions.match_community.as_deref(), Some("COMM_SET"));
+    assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:700"));
+}

@@ -1,6 +1,7 @@
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpProcess, DeviceConfig, Interface, InterfaceOspfConfig,
-    Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength, Ipv6StaticRoute, Ospf6Process, OspfAreaId,
+    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
+    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
+    Ipv6PrefixLength, Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId,
     OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
     PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
     PrefixRangeV6, StaticRoute, UnparsedLine,
@@ -29,8 +30,10 @@ struct ParsedRouteMapClause {
     seq: u32,
     match_prefix_set: Option<String>,
     match_prefix_set_v6: Option<String>,
+    match_community: Option<String>,
     set_metric: Option<u32>,
     set_local_preference: Option<u32>,
+    set_community: Option<String>,
 }
 
 enum Context {
@@ -42,9 +45,12 @@ enum Context {
         router_id: Option<Ipv4Addr>,
         iface_areas: Vec<(String, OspfAreaId)>,
     },
+    Isis(IsisProcess, Vec<String>),
     Bgp {
         as_num: u32,
         router_id: Option<Ipv4Addr>,
+        cluster_id: Option<Ipv4Addr>,
+        peer_groups: BTreeMap<String, BgpPeerGroup>,
         neighbors: Vec<BgpNeighbor>,
         networks: Vec<Ipv4Prefix>,
         neighbors_v6: Vec<BgpNeighborV6>,
@@ -161,7 +167,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut ospf_networks: Vec<ParsedOspfNetwork> = Vec::new();
     let mut ospfv3_process: Option<Ospf6Process> = None;
     let mut ospfv3_iface_areas: Vec<(String, OspfAreaId)> = Vec::new();
+    let mut isis_process: Option<IsisProcess> = None;
+    let mut isis_passive_interfaces: Vec<String> = Vec::new();
     let mut bgp_process: Option<BgpProcess> = None;
+    let mut community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut static_routes = Vec::new();
     let mut static_routes_v6 = Vec::new();
     let mut prefix_lists_map: BTreeMap<String, Vec<PrefixListEntry>> = BTreeMap::new();
@@ -205,9 +214,15 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                     ospfv3_iface_areas.append(&mut iface_areas);
                 }
+                Context::Isis(proc, passives) => {
+                    isis_process = Some(proc);
+                    isis_passive_interfaces.extend(passives);
+                }
                 Context::Bgp {
                     as_num,
                     router_id,
+                    cluster_id,
+                    peer_groups,
                     neighbors,
                     networks,
                     neighbors_v6,
@@ -217,6 +232,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     bgp_process = Some(BgpProcess {
                         as_number: as_num,
                         router_id,
+                        cluster_id,
+                        peer_groups: peer_groups.into_values().collect(),
                         neighbors,
                         networks,
                         neighbors_v6,
@@ -265,9 +282,15 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     });
                     ospfv3_iface_areas.append(&mut iface_areas);
                 }
+                Context::Isis(proc, passives) => {
+                    isis_process = Some(proc);
+                    isis_passive_interfaces.extend(passives);
+                }
                 Context::Bgp {
                     as_num,
                     router_id,
+                    cluster_id,
+                    peer_groups,
                     neighbors,
                     networks,
                     neighbors_v6,
@@ -277,6 +300,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     bgp_process = Some(BgpProcess {
                         as_number: as_num,
                         router_id,
+                        cluster_id,
+                        peer_groups: peer_groups.into_values().collect(),
                         neighbors,
                         networks,
                         neighbors_v6,
@@ -315,6 +340,11 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         || line.starts_with("router-id ")
                         || line.starts_with("interface ")
                 }
+                Context::Isis(..) => {
+                    line.starts_with("net ")
+                        || line.starts_with("is-type ")
+                        || line.starts_with("passive-interface ")
+                }
                 Context::Bgp { .. } => {
                     line.starts_with("bgp router-id ")
                         || line.starts_with("neighbor ")
@@ -351,9 +381,15 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         });
                         ospfv3_iface_areas.append(&mut iface_areas);
                     }
+                    Context::Isis(proc, passives) => {
+                        isis_process = Some(proc);
+                        isis_passive_interfaces.extend(passives);
+                    }
                     Context::Bgp {
                         as_num,
                         router_id,
+                        cluster_id,
+                        peer_groups,
                         neighbors,
                         networks,
                         neighbors_v6,
@@ -363,6 +399,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         bgp_process = Some(BgpProcess {
                             as_number: as_num,
                             router_id,
+                            cluster_id,
+                            peer_groups: peer_groups.into_values().collect(),
                             neighbors,
                             networks,
                             neighbors_v6,
@@ -407,6 +445,7 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ipv6: None,
                             ospf: None,
                             ospfv3: None,
+                            isis: None,
                         });
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -422,6 +461,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         router_id: None,
                         iface_areas: Vec::new(),
                     };
+                } else if line == "router isis" || line.starts_with("router isis ") {
+                    ctx = Context::Isis(IsisProcess::default(), Vec::new());
                 } else if line.starts_with("router ospf") {
                     let mut s = line;
                     let parsed_pid: PResult<(&str, &str, &str)> =
@@ -448,6 +489,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ctx = Context::Bgp {
                                 as_num,
                                 router_id: None,
+                                cluster_id: None,
+                                peer_groups: BTreeMap::new(),
                                 neighbors: Vec::new(),
                                 networks: Vec::new(),
                                 neighbors_v6: Vec::new(),
@@ -828,9 +871,37 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             seq: seq_num,
                             match_prefix_set: None,
                             match_prefix_set_v6: None,
+                            match_community: None,
                             set_metric: None,
                             set_local_preference: None,
+                            set_community: None,
                         });
+                    }
+                } else if let Some(comm_tail) = line.strip_prefix("ip community-list ") {
+                    let comm_clean = if let Some(tail) = comm_tail.strip_prefix("standard ") {
+                        tail
+                    } else if let Some(tail) = comm_tail.strip_prefix("expanded ") {
+                        tail
+                    } else {
+                        comm_tail
+                    };
+                    let tokens: Vec<&str> = comm_clean.split_whitespace().collect();
+                    if tokens.len() >= 3 {
+                        let name = tokens[0].to_string();
+                        let action = match tokens[1] {
+                            "permit" => PolicyAction::Permit,
+                            "deny" => PolicyAction::Deny,
+                            _ => PolicyAction::Permit,
+                        };
+                        let comms = tokens[2..].iter().map(|s| s.to_string()).collect();
+                        community_lists_map
+                            .entry(name)
+                            .or_default()
+                            .push(CommunityListEntry {
+                                sequence: None,
+                                action,
+                                communities: comms,
+                            });
                     }
                 } else if let Some(pl_tail) = line.strip_prefix("ip prefix-list ") {
                     let tokens: Vec<&str> = pl_tail.split_whitespace().collect();
@@ -1049,6 +1120,10 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 } else if let Some(stripped) = line.strip_prefix("match ipv6 address prefix-list ")
                 {
                     clause.match_prefix_set_v6 = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("match community ") {
+                    clause.match_community = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("set community ") {
+                    clause.set_community = Some(stripped.trim().to_string());
                 } else if let Some(stripped) = line.strip_prefix("set metric ") {
                     if let Ok(val) = stripped.trim().parse::<u32>() {
                         clause.set_metric = Some(val);
@@ -1168,6 +1243,7 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 area,
                                 cost: None,
                                 passive: None,
+                                bfd: None,
                             });
                         }
                         Err(_) => {
@@ -1189,6 +1265,7 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 area,
                                 cost: curr_cost,
                                 passive: curr_passive,
+                                bfd: None,
                             });
                         }
                         Err(_) => {
@@ -1210,6 +1287,7 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 area: OspfAreaId::Number(0),
                                 cost: Some(cost),
                                 passive: None,
+                                bfd: None,
                             });
                         }
                     } else {
@@ -1228,7 +1306,35 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             area: OspfAreaId::Number(0),
                             cost: None,
                             passive: Some(true),
+                            bfd: None,
                         });
+                    }
+                } else if line == "ip router isis" || line.starts_with("ip router isis ") {
+                    let _cfg = iface.isis.get_or_insert_with(InterfaceIsisConfig::default);
+                } else if let Some(stripped) = line.strip_prefix("isis metric ") {
+                    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+                    if let Some(first) = tokens.first() {
+                        if let Ok(m) = first.parse::<u32>() {
+                            let cfg = iface.isis.get_or_insert_with(InterfaceIsisConfig::default);
+                            cfg.metric = Some(m);
+                            if tokens.len() > 1 {
+                                match tokens[1] {
+                                    "level-1" => cfg.level = Some(IsisLevel::Level1),
+                                    "level-2" => cfg.level = Some(IsisLevel::Level2),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                } else if line == "isis passive" {
+                    let cfg = iface.isis.get_or_insert_with(InterfaceIsisConfig::default);
+                    cfg.passive = Some(true);
+                } else if line == "isis bfd" {
+                    let cfg = iface.isis.get_or_insert_with(InterfaceIsisConfig::default);
+                    cfg.bfd = Some(true);
+                } else if line == "ip ospf bfd" {
+                    if let Some(ref mut ospf) = iface.ospf {
+                        ospf.bfd = Some(true);
                     }
                 } else if line == "shutdown" {
                     iface.enabled = false;
@@ -1241,6 +1347,22 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         content: line.to_string(),
                         reason: "unsupported interface command".to_string(),
                     });
+                }
+            }
+            Context::Isis(ref mut proc, ref mut passives) => {
+                if let Some(stripped) = line.strip_prefix("net ") {
+                    proc.net = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("is-type ") {
+                    let level_str = stripped.trim();
+                    if level_str == "level-1" {
+                        proc.level = Some(IsisLevel::Level1);
+                    } else if level_str == "level-2-only" || level_str == "level-2" {
+                        proc.level = Some(IsisLevel::Level2);
+                    } else if level_str == "level-1-2" {
+                        proc.level = Some(IsisLevel::Level12);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("passive-interface ") {
+                    passives.push(stripped.trim().to_string());
                 }
             }
             Context::Ospf6 {
@@ -1374,6 +1496,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             }
             Context::Bgp {
                 ref mut router_id,
+                ref mut cluster_id,
+                ref mut peer_groups,
                 ref mut neighbors,
                 ref mut networks,
                 ref mut neighbors_v6,
@@ -1382,6 +1506,14 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 ref mut in_af_ipv6,
                 ..
             } => {
+                if line.starts_with("bgp cluster-id ") {
+                    let mut s = line;
+                    let parsed_cid: PResult<(&str, &str, Ipv4Addr)> =
+                        seq!("bgp cluster-id", space1, parse_ipv4).parse_next(&mut s);
+                    if let Ok((_, _, cid)) = parsed_cid {
+                        *cluster_id = Some(cid);
+                    }
+                }
                 if let Some(stripped) = line
                     .strip_prefix("bgp router-id ")
                     .or_else(|| line.strip_prefix("router-id "))
@@ -1407,68 +1539,149 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 } else if line == "exit-address-family" {
                     *in_af_ipv4 = false;
                     *in_af_ipv6 = false;
-                } else if line.starts_with("neighbor ") && line.contains(" remote-as ") {
-                    let mut s = line;
-                    let parsed_nbr: PResult<(&str, &str, Ipv4Addr, &str, &str, &str, &str)> = seq!(
-                        "neighbor",
-                        space1,
-                        parse_ipv4,
-                        space1,
-                        "remote-as",
-                        space1,
-                        rest
-                    )
-                    .parse_next(&mut s);
-
-                    if let Ok((_, _, nbr_ip, _, _, _, rem_as_str)) = parsed_nbr {
-                        if let Ok(rem_as) = rem_as_str.trim().parse::<u32>() {
-                            neighbors.push(BgpNeighbor {
-                                remote_address: nbr_ip,
-                                remote_as: rem_as,
-                            });
-                        } else {
-                            unparsed_lines.push(UnparsedLine {
-                                file_path: filename.map(String::from),
-                                line_number: line_num,
-                                content: line.to_string(),
-                                reason: "invalid neighbor remote-as".to_string(),
-                            });
-                        }
-                    } else {
-                        let mut s_v6 = line;
-                        let parsed_nbr_v6: PResult<(&str, &str, Ipv6Addr, &str, &str, &str, &str)> =
-                            seq!(
-                                "neighbor",
-                                space1,
-                                parse_ipv6,
-                                space1,
-                                "remote-as",
-                                space1,
-                                rest
-                            )
-                            .parse_next(&mut s_v6);
-
-                        if let Ok((_, _, nbr_ip_v6, _, _, _, rem_as_str)) = parsed_nbr_v6 {
-                            if let Ok(rem_as) = rem_as_str.trim().parse::<u32>() {
-                                neighbors_v6.push(BgpNeighborV6 {
-                                    remote_address: nbr_ip_v6,
-                                    remote_as: rem_as,
-                                });
+                } else if line.starts_with("neighbor ") {
+                    let tokens: Vec<&str> = line.split_whitespace().collect();
+                    if tokens.len() >= 4 && tokens[2] == "peer-group" {
+                        let target = tokens[1];
+                        let pg_name = tokens[3].to_string();
+                        if let Ok(ip) = target.parse::<Ipv4Addr>() {
+                            if let Some(nbr) = neighbors.iter_mut().find(|n| n.remote_address == ip)
+                            {
+                                nbr.peer_group = Some(pg_name);
                             } else {
-                                unparsed_lines.push(UnparsedLine {
-                                    file_path: filename.map(String::from),
-                                    line_number: line_num,
-                                    content: line.to_string(),
-                                    reason: "invalid neighbor remote-as".to_string(),
+                                neighbors.push(BgpNeighbor {
+                                    remote_address: ip,
+                                    remote_as: 0,
+                                    peer_group: Some(pg_name),
+                                    route_reflector_client: None,
+                                    cluster_id: None,
+                                    send_community: None,
+                                    bfd: None,
                                 });
                             }
-                        } else {
-                            unparsed_lines.push(UnparsedLine {
-                                file_path: filename.map(String::from),
-                                line_number: line_num,
-                                content: line.to_string(),
-                                reason: "malformed neighbor remote-as command".to_string(),
+                        } else if let Ok(ip6) = target.parse::<Ipv6Addr>() {
+                            if let Some(nbr) =
+                                neighbors_v6.iter_mut().find(|n| n.remote_address == ip6)
+                            {
+                                nbr.peer_group = Some(pg_name);
+                            } else {
+                                neighbors_v6.push(BgpNeighborV6 {
+                                    remote_address: ip6,
+                                    remote_as: 0,
+                                    peer_group: Some(pg_name),
+                                    route_reflector_client: None,
+                                    cluster_id: None,
+                                    send_community: None,
+                                    bfd: None,
+                                });
+                            }
+                        }
+                    } else if tokens.len() == 3 && tokens[2] == "peer-group" {
+                        let pg_name = tokens[1].to_string();
+                        peer_groups
+                            .entry(pg_name.clone())
+                            .or_insert_with(|| BgpPeerGroup {
+                                name: pg_name,
+                                ..Default::default()
                             });
+                    } else if tokens.len() >= 4 && tokens[2] == "remote-as" {
+                        let target = tokens[1];
+                        if let Ok(rem_as) = tokens[3].parse::<u32>() {
+                            if let Ok(ip) = target.parse::<Ipv4Addr>() {
+                                if let Some(nbr) =
+                                    neighbors.iter_mut().find(|n| n.remote_address == ip)
+                                {
+                                    nbr.remote_as = rem_as;
+                                } else {
+                                    neighbors.push(BgpNeighbor {
+                                        remote_address: ip,
+                                        remote_as: rem_as,
+                                        peer_group: None,
+                                        route_reflector_client: None,
+                                        cluster_id: None,
+                                        send_community: None,
+                                        bfd: None,
+                                    });
+                                }
+                            } else if let Ok(ip6) = target.parse::<Ipv6Addr>() {
+                                if let Some(nbr) =
+                                    neighbors_v6.iter_mut().find(|n| n.remote_address == ip6)
+                                {
+                                    nbr.remote_as = rem_as;
+                                } else {
+                                    neighbors_v6.push(BgpNeighborV6 {
+                                        remote_address: ip6,
+                                        remote_as: rem_as,
+                                        peer_group: None,
+                                        route_reflector_client: None,
+                                        cluster_id: None,
+                                        send_community: None,
+                                        bfd: None,
+                                    });
+                                }
+                            } else {
+                                let pg =
+                                    peer_groups.entry(target.to_string()).or_insert_with(|| {
+                                        BgpPeerGroup {
+                                            name: target.to_string(),
+                                            ..Default::default()
+                                        }
+                                    });
+                                pg.remote_as = Some(rem_as);
+                            }
+                        }
+                    } else if tokens.len() >= 3 && tokens[2] == "route-reflector-client" {
+                        let target = tokens[1];
+                        if let Ok(ip) = target.parse::<Ipv4Addr>() {
+                            if let Some(nbr) = neighbors.iter_mut().find(|n| n.remote_address == ip)
+                            {
+                                nbr.route_reflector_client = Some(true);
+                            }
+                        } else if let Ok(ip6) = target.parse::<Ipv6Addr>() {
+                            if let Some(nbr) =
+                                neighbors_v6.iter_mut().find(|n| n.remote_address == ip6)
+                            {
+                                nbr.route_reflector_client = Some(true);
+                            }
+                        } else if let Some(pg) = peer_groups.get_mut(target) {
+                            pg.route_reflector_client = Some(true);
+                        }
+                    } else if tokens.len() >= 3 && tokens[2] == "send-community" {
+                        let target = tokens[1];
+                        let sc = if tokens.len() > 3 {
+                            tokens[3].to_string()
+                        } else {
+                            "standard".to_string()
+                        };
+                        if let Ok(ip) = target.parse::<Ipv4Addr>() {
+                            if let Some(nbr) = neighbors.iter_mut().find(|n| n.remote_address == ip)
+                            {
+                                nbr.send_community = Some(sc.clone());
+                            }
+                        } else if let Ok(ip6) = target.parse::<Ipv6Addr>() {
+                            if let Some(nbr) =
+                                neighbors_v6.iter_mut().find(|n| n.remote_address == ip6)
+                            {
+                                nbr.send_community = Some(sc.clone());
+                            }
+                        } else if let Some(pg) = peer_groups.get_mut(target) {
+                            pg.send_community = Some(sc);
+                        }
+                    } else if tokens.len() >= 3 && tokens[2] == "bfd" {
+                        let target = tokens[1];
+                        if let Ok(ip) = target.parse::<Ipv4Addr>() {
+                            if let Some(nbr) = neighbors.iter_mut().find(|n| n.remote_address == ip)
+                            {
+                                nbr.bfd = Some(true);
+                            }
+                        } else if let Ok(ip6) = target.parse::<Ipv6Addr>() {
+                            if let Some(nbr) =
+                                neighbors_v6.iter_mut().find(|n| n.remote_address == ip6)
+                            {
+                                nbr.bfd = Some(true);
+                            }
+                        } else if let Some(pg) = peer_groups.get_mut(target) {
+                            pg.bfd = Some(true);
                         }
                     }
                 } else if let Some(stripped) = line.strip_prefix("network ") {
@@ -1574,9 +1787,15 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             });
             ospfv3_iface_areas.append(&mut iface_areas);
         }
+        Context::Isis(proc, passives) => {
+            isis_process = Some(proc);
+            isis_passive_interfaces.extend(passives);
+        }
         Context::Bgp {
             as_num,
             router_id,
+            cluster_id,
+            peer_groups,
             neighbors,
             networks,
             neighbors_v6,
@@ -1586,6 +1805,8 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             bgp_process = Some(BgpProcess {
                 as_number: as_num,
                 router_id,
+                cluster_id,
+                peer_groups: peer_groups.into_values().collect(),
                 neighbors,
                 networks,
                 neighbors_v6,
@@ -1607,6 +1828,7 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             area: net_stmt.area.clone(),
                             cost: None,
                             passive: None,
+                            bfd: None,
                         });
                         break;
                     }
@@ -1645,15 +1867,22 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 conditions: PolicyConditions {
                     match_prefix_set: clause.match_prefix_set,
                     match_prefix_set_v6: clause.match_prefix_set_v6,
+                    match_community: clause.match_community,
                 },
                 actions: PolicyActions {
                     policy_result: clause.action,
                     set_metric: clause.set_metric,
                     set_local_preference: clause.set_local_preference,
+                    set_community: clause.set_community,
                 },
             });
         }
         policies.push(PolicyDefinition { name, statements });
+    }
+
+    let mut community_lists = Vec::new();
+    for (name, entries) in community_lists_map {
+        community_lists.push(CommunityList { name, entries });
     }
 
     DeviceConfig {
@@ -1661,11 +1890,13 @@ pub fn parse_frr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         interfaces,
         ospf: ospf_process,
         ospfv3: ospfv3_process,
+        isis: isis_process,
         bgp: bgp_process,
         static_routes,
         static_routes_v6,
         prefix_lists,
         prefix_lists_v6,
+        community_lists,
         policies,
         unparsed_lines,
     }

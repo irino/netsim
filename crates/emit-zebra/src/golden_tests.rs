@@ -16,8 +16,10 @@ fn test_zebra_golden() {
                     area: OspfAreaId::Number(0),
                     cost: None,
                     passive: None,
+                    bfd: None,
                 }),
                 ospfv3: None,
+                isis: None,
             },
             Interface {
                 name: "eth2".to_string(),
@@ -27,6 +29,7 @@ fn test_zebra_golden() {
                 ipv6: None,
                 ospf: None,
                 ospfv3: None,
+                isis: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -34,11 +37,13 @@ fn test_zebra_golden() {
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
         }),
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
         prefix_lists_v6: Vec::new(),
+        community_lists: Vec::new(),
         policies: Vec::new(),
         unparsed_lines: Vec::new(),
     };

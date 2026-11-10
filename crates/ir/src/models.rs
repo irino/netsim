@@ -340,6 +340,40 @@ impl fmt::Display for OspfAreaId {
     }
 }
 
+/// IS-IS level for an interface or process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IsisLevel {
+    Level1,
+    Level2,
+    Level12,
+}
+
+/// IS-IS configuration for an interface.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct InterfaceIsisConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<IsisLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<bool>,
+}
+
+/// IS-IS routing process configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IsisProcess {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<IsisLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub te_router_id: Option<Ipv4Addr>,
+}
 /// OSPF configuration for an interface.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -349,6 +383,8 @@ pub struct InterfaceOspfConfig {
     pub cost: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<bool>,
 }
 
 /// Network interface configuration aligned with ietf-interfaces.
@@ -368,6 +404,8 @@ pub struct Interface {
     pub ospf: Option<InterfaceOspfConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospfv3: Option<InterfaceOspfConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub isis: Option<InterfaceIsisConfig>,
 }
 
 impl Interface {
@@ -420,12 +458,39 @@ pub struct Ipv6StaticRoute {
     pub next_hop: Ipv6Addr,
 }
 
+/// BGP peer group / template configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpPeerGroup {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_as: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector_client: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<bool>,
+}
+
 /// BGP neighbor peer configuration aligned with ietf-bgp.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct BgpNeighbor {
     pub remote_address: Ipv4Addr,
     pub remote_as: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector_client: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<bool>,
 }
 
 /// BGP IPv6 neighbor peer configuration aligned with ietf-bgp.
@@ -434,6 +499,16 @@ pub struct BgpNeighbor {
 pub struct BgpNeighborV6 {
     pub remote_address: Ipv6Addr,
     pub remote_as: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector_client: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<bool>,
 }
 
 /// BGP process configuration aligned with ietf-routing / ietf-bgp.
@@ -443,6 +518,10 @@ pub struct BgpProcess {
     pub as_number: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub router_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_groups: Vec<BgpPeerGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub neighbors: Vec<BgpNeighbor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -695,6 +774,23 @@ pub struct PrefixListV6 {
     pub entries: Vec<PrefixListEntryV6>,
 }
 
+/// A single entry in a BGP community-list.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CommunityListEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u32>,
+    pub action: PolicyAction,
+    pub communities: Vec<String>,
+}
+
+/// Named BGP community-list.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CommunityList {
+    pub name: String,
+    pub entries: Vec<CommunityListEntry>,
+}
 /// Conditions for a routing policy statement aligned with RFC 9067 (`ietf-routing-policy`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -703,6 +799,8 @@ pub struct PolicyConditions {
     pub match_prefix_set: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_prefix_set_v6: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_community: Option<String>,
 }
 
 /// Actions for a routing policy statement aligned with RFC 9067 (`ietf-routing-policy`).
@@ -714,6 +812,8 @@ pub struct PolicyActions {
     pub set_metric: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set_local_preference: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set_community: Option<String>,
 }
 
 impl Default for PolicyActions {
@@ -722,6 +822,7 @@ impl Default for PolicyActions {
             policy_result: PolicyAction::Permit,
             set_metric: None,
             set_local_preference: None,
+            set_community: None,
         }
     }
 }
@@ -772,6 +873,8 @@ pub struct DeviceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospfv3: Option<Ospf6Process>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub isis: Option<IsisProcess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bgp: Option<BgpProcess>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub static_routes: Vec<StaticRoute>,
@@ -781,6 +884,8 @@ pub struct DeviceConfig {
     pub prefix_lists: Vec<PrefixList>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prefix_lists_v6: Vec<PrefixListV6>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub community_lists: Vec<CommunityList>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policies: Vec<PolicyDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

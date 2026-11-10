@@ -87,6 +87,7 @@ fn test_valid_device_with_bgp_and_static_routes() {
                 ipv6: None,
                 ospf: None,
                 ospfv3: None,
+                isis: None,
             },
             Interface {
                 name: "Loopback0".to_string(),
@@ -99,15 +100,25 @@ fn test_valid_device_with_bgp_and_static_routes() {
                 ipv6: None,
                 ospf: None,
                 ospfv3: None,
+                isis: None,
             },
         ],
         ospf: None,
+        ospfv3: None,
+        isis: None,
         bgp: Some(BgpProcess {
             as_number: 65001,
             router_id: Some("198.51.100.1".parse().unwrap()),
+            cluster_id: None,
+            peer_groups: vec![],
             neighbors: vec![BgpNeighbor {
                 remote_address: "203.0.113.2".parse().unwrap(),
                 remote_as: 65002,
+                peer_group: None,
+                route_reflector_client: None,
+                cluster_id: None,
+                send_community: None,
+                bfd: None,
             }],
             networks: vec![Ipv4Prefix::new(
                 "198.51.100.0".parse().unwrap(),
@@ -116,7 +127,6 @@ fn test_valid_device_with_bgp_and_static_routes() {
             neighbors_v6: Vec::new(),
             networks_v6: Vec::new(),
         }),
-        ospfv3: None,
         static_routes: vec![StaticRoute {
             destination: Ipv4Prefix::new("0.0.0.0".parse().unwrap(), PrefixLength::new(0).unwrap()),
             next_hop: "203.0.113.2".parse().unwrap(),
@@ -124,6 +134,7 @@ fn test_valid_device_with_bgp_and_static_routes() {
         static_routes_v6: Vec::new(),
         prefix_lists: vec![],
         prefix_lists_v6: vec![],
+        community_lists: vec![],
         policies: vec![],
         unparsed_lines: vec![],
     };
@@ -372,9 +383,11 @@ fn test_valid_routing_policy_prefix_sets_validation() {
             ipv6: None,
             ospf: None,
             ospfv3: None,
+            isis: None,
         }],
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: vec![],
         static_routes_v6: Vec::new(),
@@ -424,6 +437,7 @@ fn test_valid_routing_policy_prefix_sets_validation() {
                 }),
             }],
         }],
+        community_lists: vec![],
         policies: vec![ir::PolicyDefinition {
             name: "POLICY-BGP".to_string(),
             statements: vec![
@@ -432,11 +446,13 @@ fn test_valid_routing_policy_prefix_sets_validation() {
                     conditions: ir::PolicyConditions {
                         match_prefix_set: Some("FILTER-BGP".to_string()),
                         match_prefix_set_v6: None,
+                        match_community: None,
                     },
                     actions: ir::PolicyActions {
                         policy_result: ir::PolicyAction::Permit,
                         set_metric: Some(100),
                         set_local_preference: Some(200),
+                        set_community: None,
                     },
                 },
                 ir::PolicyStatement {
@@ -444,11 +460,13 @@ fn test_valid_routing_policy_prefix_sets_validation() {
                     conditions: ir::PolicyConditions {
                         match_prefix_set: None,
                         match_prefix_set_v6: Some("PL-V6".to_string()),
+                        match_community: None,
                     },
                     actions: ir::PolicyActions {
                         policy_result: ir::PolicyAction::Deny,
                         set_metric: None,
                         set_local_preference: None,
+                        set_community: None,
                     },
                 },
             ],

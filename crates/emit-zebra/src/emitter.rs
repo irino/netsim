@@ -105,12 +105,88 @@ pub struct ZebraOspf {
     pub area: Vec<ZebraOspfArea>,
 }
 
+/// zebra-rs BFD container (`bfd`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraBfdConfig {
+    pub enabled: bool,
+}
+
+/// zebra-rs Route Reflector container (`route-reflector`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraRouteReflector {
+    pub client: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+}
+
+/// zebra-rs BGP neighbor group / template (`router -> bgp -> neighbor-group`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgpNeighborGroup {
+    pub name: String,
+    #[serde(rename = "peer-as", skip_serializing_if = "Option::is_none")]
+    pub peer_as: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector: Option<ZebraRouteReflector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<ZebraBfdConfig>,
+}
+
+/// zebra-rs community-set member (`community-set -> members`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraCommunitySet {
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+/// zebra-rs IS-IS interface IPv4 enablement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ZebraIsisInterfaceIpv4 {
+    pub enabled: bool,
+}
+
+/// zebra-rs IS-IS interface configuration (`router -> isis -> interface`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraIsisInterface {
+    pub if_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<ZebraBfdConfig>,
+    pub ipv4: ZebraIsisInterfaceIpv4,
+}
+
+/// zebra-rs IS-IS protocol configuration (`router -> isis`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraIsis {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub interface: Vec<ZebraIsisInterface>,
+}
 /// zebra-rs BGP neighbor configuration (`router -> bgp -> neighbor`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct ZebraBgpNeighbor {
     pub peer_address: Ipv4Addr,
     pub remote_as: u32,
+    #[serde(rename = "peer-group", skip_serializing_if = "Option::is_none")]
+    pub peer_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector: Option<ZebraRouteReflector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<ZebraBfdConfig>,
 }
 
 /// zebra-rs BGP IPv6 neighbor configuration (`router -> bgp -> neighbor-v6`).
@@ -119,6 +195,14 @@ pub struct ZebraBgpNeighbor {
 pub struct ZebraBgpNeighborV6 {
     pub peer_address: Ipv6Addr,
     pub remote_as: u32,
+    #[serde(rename = "peer-group", skip_serializing_if = "Option::is_none")]
+    pub peer_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector: Option<ZebraRouteReflector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<ZebraBfdConfig>,
 }
 
 /// zebra-rs BGP protocol configuration (`router -> bgp`).
@@ -129,6 +213,10 @@ pub struct ZebraBgp {
     pub as_number: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub router_id: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Ipv4Addr>,
+    #[serde(rename = "neighbor-group", skip_serializing_if = "Vec::is_empty")]
+    pub neighbor_group: Vec<ZebraBgpNeighborGroup>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub neighbor: Vec<ZebraBgpNeighbor>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -146,6 +234,8 @@ pub struct ZebraRouter {
     pub ospf: Option<ZebraOspf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ospf6: Option<ZebraOspf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub isis: Option<ZebraIsis>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bgp: Option<ZebraBgp>,
 }
@@ -173,6 +263,8 @@ pub struct ZebraPrefixSet {
 pub struct ZebraPolicyMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix_set: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub community: Option<String>,
 }
 
 /// zebra-rs numeric set operation (`set: NUM`).
@@ -189,6 +281,8 @@ pub struct ZebraPolicySet {
     pub med: Option<ZebraNumericSet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_preference: Option<ZebraNumericSet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub community: Option<String>,
 }
 
 /// zebra-rs policy entry (`policy -> entry`).
@@ -221,6 +315,12 @@ pub struct ZebraConfig {
     pub interface: Vec<ZebraInterface>,
     #[serde(rename = "prefix-set", default, skip_serializing_if = "Vec::is_empty")]
     pub prefix_set: Vec<ZebraPrefixSet>,
+    #[serde(
+        rename = "community-set",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub community_set: Vec<ZebraCommunitySet>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policy: Vec<ZebraPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,6 +474,33 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         }
     }
 
+    let mut isis_interfaces = Vec::new();
+    for iface in &device.interfaces {
+        if let Some(ref isis_cfg) = iface.isis {
+            isis_interfaces.push(ZebraIsisInterface {
+                if_name: iface.name.clone(),
+                metric: isis_cfg.metric,
+                passive: isis_cfg.passive,
+                bfd: isis_cfg.bfd.map(|b| ZebraBfdConfig { enabled: b }),
+                ipv4: ZebraIsisInterfaceIpv4 { enabled: true },
+            });
+        }
+    }
+    isis_interfaces.sort_by(|a, b| a.if_name.cmp(&b.if_name));
+
+    // Community sets emission
+    let mut community_sets = Vec::new();
+    for cl in &device.community_lists {
+        let mut members = Vec::new();
+        for entry in &cl.entries {
+            members.extend(entry.communities.clone());
+        }
+        community_sets.push(ZebraCommunitySet {
+            name: cl.name.clone(),
+            members,
+        });
+    }
+    community_sets.sort_by(|a, b| a.name.cmp(&b.name));
     // Prefix-set emission
     let mut prefix_sets = Vec::new();
     for pl in &device.prefix_lists {
@@ -426,12 +553,20 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
                 .match_prefix_set
                 .clone()
                 .or_else(|| stmt.conditions.match_prefix_set_v6.clone());
-            let match_ = match_ps.map(|ps| ZebraPolicyMatch {
-                prefix_set: Some(ps),
-            });
+            let match_comm = stmt.conditions.match_community.clone();
+
+            let match_ = if match_ps.is_some() || match_comm.is_some() {
+                Some(ZebraPolicyMatch {
+                    prefix_set: match_ps,
+                    community: match_comm,
+                })
+            } else {
+                None
+            };
 
             let set = if stmt.actions.set_metric.is_some()
                 || stmt.actions.set_local_preference.is_some()
+                || stmt.actions.set_community.is_some()
             {
                 Some(ZebraPolicySet {
                     med: stmt.actions.set_metric.map(|m| ZebraNumericSet { set: m }),
@@ -439,6 +574,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
                         .actions
                         .set_local_preference
                         .map(|lp| ZebraNumericSet { set: lp }),
+                    community: stmt.actions.set_community.clone(),
                 })
             } else {
                 None
@@ -538,14 +674,60 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
     } else {
         None
     };
+    // IS-IS configuration
+    let isis = if let Some(ref isis_proc) = device.isis {
+        let is_type = match isis_proc.level {
+            Some(ir::IsisLevel::Level1) => Some("level-1".to_string()),
+            Some(ir::IsisLevel::Level2) => Some("level-2-only".to_string()),
+            Some(ir::IsisLevel::Level12) => Some("level-1-2".to_string()),
+            None => None,
+        };
+        Some(ZebraIsis {
+            net: isis_proc.net.clone(),
+            is_type,
+            interface: isis_interfaces,
+        })
+    } else if !isis_interfaces.is_empty() {
+        Some(ZebraIsis {
+            net: None,
+            is_type: None,
+            interface: isis_interfaces,
+        })
+    } else {
+        None
+    };
+
     // BGP configuration
     let bgp = if let Some(ref bgp_proc) = device.bgp {
+        let mut peer_groups: Vec<ZebraBgpNeighborGroup> = bgp_proc
+            .peer_groups
+            .iter()
+            .map(|pg| ZebraBgpNeighborGroup {
+                name: pg.name.clone(),
+                peer_as: pg.remote_as,
+                route_reflector: pg.route_reflector_client.map(|c| ZebraRouteReflector {
+                    client: c,
+                    cluster_id: pg.cluster_id,
+                }),
+                send_community: pg.send_community.clone(),
+                bfd: pg.bfd.map(|b| ZebraBfdConfig { enabled: b }),
+            })
+            .collect();
+        peer_groups.sort_by(|a, b| a.name.cmp(&b.name));
+
         let mut neighbors: Vec<ZebraBgpNeighbor> = bgp_proc
             .neighbors
             .iter()
             .map(|n| ZebraBgpNeighbor {
                 peer_address: n.remote_address,
                 remote_as: n.remote_as,
+                peer_group: n.peer_group.clone(),
+                route_reflector: n.route_reflector_client.map(|c| ZebraRouteReflector {
+                    client: c,
+                    cluster_id: n.cluster_id,
+                }),
+                send_community: n.send_community.clone(),
+                bfd: n.bfd.map(|b| ZebraBfdConfig { enabled: b }),
             })
             .collect();
         neighbors.sort_by_key(|a| a.peer_address);
@@ -559,6 +741,13 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             .map(|n| ZebraBgpNeighborV6 {
                 peer_address: n.remote_address,
                 remote_as: n.remote_as,
+                peer_group: n.peer_group.clone(),
+                route_reflector: n.route_reflector_client.map(|c| ZebraRouteReflector {
+                    client: c,
+                    cluster_id: n.cluster_id,
+                }),
+                send_community: n.send_community.clone(),
+                bfd: n.bfd.map(|b| ZebraBfdConfig { enabled: b }),
             })
             .collect();
         neighbors_v6.sort_by_key(|a| a.peer_address);
@@ -570,6 +759,8 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         Some(ZebraBgp {
             as_number: bgp_proc.as_number,
             router_id: bgp_proc.router_id,
+            cluster_id: bgp_proc.cluster_id,
+            neighbor_group: peer_groups,
             neighbor: neighbors,
             network: networks,
             neighbor_v6: neighbors_v6,
@@ -579,8 +770,13 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
         None
     };
 
-    let router = if ospf.is_some() || ospf6.is_some() || bgp.is_some() {
-        Some(ZebraRouter { ospf, ospf6, bgp })
+    let router = if ospf.is_some() || ospf6.is_some() || isis.is_some() || bgp.is_some() {
+        Some(ZebraRouter {
+            ospf,
+            ospf6,
+            isis,
+            bgp,
+        })
     } else {
         None
     };
@@ -595,6 +791,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             ip6,
             interface: interfaces,
             prefix_set: prefix_sets,
+            community_set: community_sets,
             policy: policies,
             router,
         },

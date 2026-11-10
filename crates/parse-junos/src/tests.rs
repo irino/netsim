@@ -268,3 +268,83 @@ set policy-options policy-statement PS-BGP term 2 then reject
         ir::PolicyAction::Deny
     );
 }
+
+#[test]
+fn test_parse_junos_isis_and_advanced_bgp() {
+    let input = r#"
+set system host-name junos-test
+set interfaces ge-0/0/0 unit 0 family inet address 10.0.0.1/24
+set interfaces ge-0/0/0 unit 0 family iso address "49.0001.0001.0001.0001.00"
+set protocols isis interface ge-0/0/0.0 level 2 metric 20
+set protocols isis interface ge-0/0/0.0 bfd-liveness-detection
+set protocols isis interface lo0.0 passive
+set protocols isis level 1 disable
+set policy-options community COMM_TEST members "65000:100"
+set policy-options policy-statement PS_TEST term t1 from community COMM_TEST
+set policy-options policy-statement PS_TEST term t1 then community set "65000:200"
+set policy-options policy-statement PS_TEST term t1 then accept
+set protocols bgp local-as 65000
+set protocols bgp group RR_CLIENTS type internal
+set protocols bgp group RR_CLIENTS cluster 1.1.1.1
+set protocols bgp group RR_CLIENTS peer-as 65000
+set protocols bgp group RR_CLIENTS bfd-liveness-detection
+set protocols bgp group RR_CLIENTS neighbor 10.0.0.2
+"#;
+    let config = parse_junos_config(input, None);
+    assert_eq!(config.hostname, "junos-test");
+
+    // IS-IS
+    let isis = config.isis.expect("IS-IS process should exist");
+    assert_eq!(isis.net.as_deref(), Some("49.0001.0001.0001.0001.00"));
+    assert_eq!(isis.level, Some(ir::IsisLevel::Level2));
+
+    let ge = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "ge-0/0/0.0")
+        .unwrap();
+    let isis_if = ge.isis.as_ref().unwrap();
+    assert_eq!(isis_if.metric, Some(20));
+    assert_eq!(isis_if.level, Some(ir::IsisLevel::Level2));
+    assert_eq!(isis_if.bfd, Some(true));
+
+    let lo = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "lo0.0")
+        .unwrap();
+    assert_eq!(lo.isis.as_ref().unwrap().passive, Some(true));
+
+    // BGP
+    let bgp = config.bgp.expect("BGP process should exist");
+    assert_eq!(bgp.cluster_id, Some("1.1.1.1".parse().unwrap()));
+    assert_eq!(bgp.peer_groups.len(), 1);
+    let pg = &bgp.peer_groups[0];
+    assert_eq!(pg.name, "RR_CLIENTS");
+    assert_eq!(pg.remote_as, Some(65000));
+    assert_eq!(pg.route_reflector_client, Some(true));
+    assert_eq!(pg.bfd, Some(true));
+
+    assert_eq!(bgp.neighbors.len(), 1);
+    let nbr = &bgp.neighbors[0];
+    assert_eq!(nbr.peer_group.as_deref(), Some("RR_CLIENTS"));
+    assert_eq!(nbr.route_reflector_client, Some(true));
+    assert_eq!(nbr.cluster_id, Some("1.1.1.1".parse().unwrap()));
+    assert_eq!(nbr.bfd, Some(true));
+
+    // Community list & Policy statement
+    assert_eq!(config.community_lists.len(), 1);
+    assert_eq!(config.community_lists[0].name, "COMM_TEST");
+    assert_eq!(
+        config.community_lists[0].entries[0].communities,
+        vec!["65000:100"]
+    );
+
+    assert_eq!(config.policies.len(), 1);
+    let stmt = &config.policies[0].statements[0];
+    assert_eq!(
+        stmt.conditions.match_community.as_deref(),
+        Some("COMM_TEST")
+    );
+    assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:200"));
+}

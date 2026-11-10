@@ -555,3 +555,96 @@ fn test_cisco_ios_ipv6_parsing() {
     assert_eq!(bgp.networks_v6.len(), 1);
     assert_eq!(bgp.networks_v6[0].to_string(), "2001:db8:2::/64");
 }
+
+#[test]
+fn test_parse_ios_isis_and_advanced_bgp() {
+    let input = r#"
+hostname R-ADV
+!
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.0
+ ip router isis
+ isis metric 20
+ isis bfd
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+ ip router isis
+ isis passive
+!
+router isis
+ net 49.0001.0001.0001.0001.00
+ is-type level-2-only
+!
+ip community-list standard COMM_TEST permit 65000:100
+!
+route-map RM_TEST permit 10
+ match community COMM_TEST
+ set community 65000:200
+!
+router bgp 65000
+ bgp router-id 1.1.1.1
+ bgp cluster-id 1.1.1.1
+ neighbor IBGP_PEERS peer-group
+ neighbor IBGP_PEERS remote-as 65000
+ neighbor IBGP_PEERS route-reflector-client
+ neighbor IBGP_PEERS send-community
+ neighbor IBGP_PEERS fall-over bfd
+ neighbor 10.0.0.2 peer-group IBGP_PEERS
+!
+"#;
+    let config = parse_ios_config(input, None);
+    assert_eq!(config.hostname, "R-ADV");
+
+    // Check IS-IS
+    let isis = config.isis.expect("IS-IS process should be parsed");
+    assert_eq!(isis.net.as_deref(), Some("49.0001.0001.0001.0001.00"));
+    assert_eq!(isis.level, Some(ir::IsisLevel::Level2));
+
+    let eth = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "GigabitEthernet0/0")
+        .unwrap();
+    let isis_if = eth.isis.as_ref().unwrap();
+    assert_eq!(isis_if.metric, Some(20));
+    assert_eq!(isis_if.bfd, Some(true));
+
+    let lo = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Loopback0")
+        .unwrap();
+    assert_eq!(lo.isis.as_ref().unwrap().passive, Some(true));
+
+    // Check BGP
+    let bgp = config.bgp.expect("BGP should be parsed");
+    assert_eq!(bgp.cluster_id, Some("1.1.1.1".parse().unwrap()));
+    assert_eq!(bgp.peer_groups.len(), 1);
+    let pg = &bgp.peer_groups[0];
+    assert_eq!(pg.name, "IBGP_PEERS");
+    assert_eq!(pg.remote_as, Some(65000));
+    assert_eq!(pg.route_reflector_client, Some(true));
+    assert_eq!(pg.send_community.as_deref(), Some("standard"));
+    assert_eq!(pg.bfd, Some(true));
+
+    assert_eq!(bgp.neighbors.len(), 1);
+    assert_eq!(bgp.neighbors[0].peer_group.as_deref(), Some("IBGP_PEERS"));
+
+    // Check Community List
+    assert_eq!(config.community_lists.len(), 1);
+    assert_eq!(config.community_lists[0].name, "COMM_TEST");
+    assert_eq!(
+        config.community_lists[0].entries[0].communities,
+        vec!["65000:100"]
+    );
+
+    // Check Policy match and set community
+    assert_eq!(config.policies.len(), 1);
+    let stmt = &config.policies[0].statements[0];
+    assert_eq!(
+        stmt.conditions.match_community.as_deref(),
+        Some("COMM_TEST")
+    );
+    assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:200"));
+}

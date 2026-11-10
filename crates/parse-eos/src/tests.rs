@@ -221,3 +221,99 @@ route-map RM-POLICY deny 20
         ir::PolicyAction::Deny
     );
 }
+
+#[test]
+fn test_parse_eos_isis_and_advanced_bgp() {
+    let input = r#"
+hostname eos-test
+!
+interface Ethernet1
+   no shutdown
+   ip address 10.0.0.1/24
+   isis enable
+   isis metric 25
+   isis bfd
+!
+interface Loopback0
+   ip address 1.1.1.1/32
+   isis enable
+   isis passive
+!
+router isis
+   net 49.0001.0001.0001.0001.00
+   is-type level-2
+!
+ip community-list COMM_EOS permit 65000:100
+!
+route-map RM_EOS permit 10
+   match community COMM_EOS
+   set community 65000:500
+!
+router bgp 65000
+   router-id 1.1.1.1
+   cluster-id 1.1.1.1
+   neighbor SPINE peer group
+   neighbor SPINE remote-as 65000
+   neighbor SPINE route-reflector-client
+   neighbor SPINE send-community
+   neighbor SPINE bfd
+   neighbor 10.0.0.2 peer group SPINE
+!
+"#;
+    let config = parse_eos_config(input, None);
+    assert_eq!(config.hostname, "eos-test");
+
+    // IS-IS
+    let isis = config.isis.expect("IS-IS process should exist");
+    assert_eq!(isis.net.as_deref(), Some("49.0001.0001.0001.0001.00"));
+    assert_eq!(isis.level, Some(ir::IsisLevel::Level2));
+
+    let eth = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Ethernet1")
+        .unwrap();
+    let isis_if = eth.isis.as_ref().unwrap();
+    assert_eq!(isis_if.metric, Some(25));
+    assert_eq!(isis_if.bfd, Some(true));
+
+    let lo = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Loopback0")
+        .unwrap();
+    assert_eq!(lo.isis.as_ref().unwrap().passive, Some(true));
+
+    // BGP
+    let bgp = config.bgp.expect("BGP process should exist");
+    assert_eq!(bgp.cluster_id, Some("1.1.1.1".parse().unwrap()));
+    assert_eq!(bgp.peer_groups.len(), 1);
+    let pg = &bgp.peer_groups[0];
+    assert_eq!(pg.name, "SPINE");
+    assert_eq!(pg.remote_as, Some(65000));
+    assert_eq!(pg.route_reflector_client, Some(true));
+    assert_eq!(pg.send_community.as_deref(), Some("standard"));
+    assert_eq!(pg.bfd, Some(true));
+
+    assert_eq!(bgp.neighbors.len(), 1);
+    assert_eq!(bgp.neighbors[0].peer_group.as_deref(), Some("SPINE"));
+
+    // Community list & Route Map
+    assert_eq!(config.community_lists.len(), 1);
+    assert_eq!(config.community_lists[0].name, "COMM_EOS");
+    assert_eq!(config.policies.len(), 1);
+    assert_eq!(
+        config.policies[0].statements[0]
+            .conditions
+            .match_community
+            .as_deref(),
+        Some("COMM_EOS")
+    );
+    assert_eq!(
+        config.policies[0].statements[0]
+            .actions
+            .set_community
+            .as_deref(),
+        Some("65000:500")
+    );
+}

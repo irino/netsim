@@ -772,3 +772,107 @@ fn test_e2e_mixed_5vendors_ipv6_pipeline() {
 
     let _ = fs::remove_dir_all(&tmp_out);
 }
+
+#[test]
+fn test_e2e_phase3_isis_and_advanced_bgp() {
+    let in_dir = create_temp_dir("phase3_in");
+    let out_dir = create_temp_dir("phase3_out");
+
+    let r1_path = in_dir.join("cisco-r1.cfg");
+    let r2_path = in_dir.join("arista-r2.cfg");
+
+    // R1: Cisco IOS with IS-IS and BGP Route Reflector
+    let r1_config = r#"
+hostname r1
+!
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.0
+ ip router isis
+ isis metric 10
+ isis bfd
+!
+interface Loopback0
+ ip address 1.1.1.1 255.255.255.255
+ ip router isis
+ isis passive
+!
+router isis
+ net 49.0001.0001.0001.0001.00
+ is-type level-2-only
+!
+ip community-list standard COMM_TEST permit 65000:100
+!
+route-map RM_TEST permit 10
+ match community COMM_TEST
+ set community 65000:200
+!
+router bgp 65000
+ bgp router-id 1.1.1.1
+ bgp cluster-id 1.1.1.1
+ neighbor CLIENTS peer-group
+ neighbor CLIENTS remote-as 65000
+ neighbor CLIENTS route-reflector-client
+ neighbor CLIENTS send-community
+ neighbor CLIENTS fall-over bfd
+ neighbor 10.0.0.2 peer-group CLIENTS
+!
+"#;
+    fs::write(&r1_path, r1_config).unwrap();
+
+    // R2: Arista EOS with IS-IS and BGP client
+    let r2_config = r#"
+hostname r2
+!
+interface Ethernet1
+ no shutdown
+ ip address 10.0.0.2/24
+ isis enable
+ isis metric 10
+ isis bfd
+!
+interface Loopback0
+ ip address 2.2.2.2/32
+ isis enable
+ isis passive
+!
+router isis
+ net 49.0001.0002.0002.0002.00
+ is-type level-2
+!
+router bgp 65000
+ router-id 2.2.2.2
+ neighbor 10.0.0.1 remote-as 65000
+ neighbor 10.0.0.1 send-community
+ neighbor 10.0.0.1 bfd
+!
+"#;
+    fs::write(&r2_path, r2_config).unwrap();
+
+    let cli = Cli {
+        command: Commands::GenLab {
+            configs: in_dir,
+            out: out_dir.clone(),
+            lab_name: "phase3-lab".to_string(),
+        },
+    };
+
+    let run_res = run(cli);
+    assert!(run_res.is_ok());
+
+    // Read generated zebra configurations
+    let r1_zebra = fs::read_to_string(out_dir.join("r1.zebra.yaml")).unwrap();
+    assert!(r1_zebra.contains("isis:"));
+    assert!(r1_zebra.contains("net: 49.0001.0001.0001.0001.00"));
+    assert!(r1_zebra.contains("is-type: level-2-only"));
+    assert!(r1_zebra.contains("cluster-id: 1.1.1.1"));
+    assert!(r1_zebra.contains("route-reflector:"));
+    assert!(r1_zebra.contains("client: true"));
+    assert!(r1_zebra.contains("community-set:"));
+    assert!(r1_zebra.contains("COMM_TEST"));
+
+    let r2_zebra = fs::read_to_string(out_dir.join("r2.zebra.yaml")).unwrap();
+    assert!(r2_zebra.contains("isis:"));
+    assert!(r2_zebra.contains("net: 49.0001.0002.0002.0002.00"));
+    assert!(r2_zebra.contains("send-community: standard"));
+    assert!(r2_zebra.contains("peer-address: 10.0.0.1"));
+}

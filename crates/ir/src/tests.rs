@@ -85,12 +85,15 @@ fn test_serde_serialization_deserialization() {
                 area: OspfAreaId::Number(0),
                 cost: Some(10),
                 passive: Some(false),
+                bfd: None,
             }),
             ospfv3: Some(InterfaceOspfConfig {
                 area: OspfAreaId::Number(0),
                 cost: Some(10),
                 passive: Some(false),
+                bfd: None,
             }),
+            isis: None,
         }],
         ospf: Some(OspfProcess {
             process_id: 1,
@@ -100,17 +103,30 @@ fn test_serde_serialization_deserialization() {
             process_id: 1,
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
         }),
+        isis: None,
         bgp: Some(BgpProcess {
             as_number: 65001,
             router_id: Some(std::net::Ipv4Addr::new(1, 1, 1, 1)),
+            cluster_id: None,
+            peer_groups: vec![],
             neighbors: vec![BgpNeighbor {
                 remote_address: std::net::Ipv4Addr::new(10, 0, 0, 2),
                 remote_as: 65002,
+                peer_group: None,
+                route_reflector_client: None,
+                cluster_id: None,
+                send_community: None,
+                bfd: None,
             }],
             networks: vec!["10.0.0.0/24".parse().unwrap()],
             neighbors_v6: vec![BgpNeighborV6 {
                 remote_address: "2001:db8:1::2".parse().unwrap(),
                 remote_as: 65002,
+                peer_group: None,
+                route_reflector_client: None,
+                cluster_id: None,
+                send_community: None,
+                bfd: None,
             }],
             networks_v6: vec!["2001:db8:1::/64".parse().unwrap()],
         }),
@@ -154,6 +170,7 @@ fn test_serde_serialization_deserialization() {
                 range: None,
             }],
         }],
+        community_lists: vec![],
         policies: vec![PolicyDefinition {
             name: "ROUTE-MAP-1".to_string(),
             statements: vec![PolicyStatement {
@@ -161,11 +178,13 @@ fn test_serde_serialization_deserialization() {
                 conditions: PolicyConditions {
                     match_prefix_set: Some("FILTER-BGP".to_string()),
                     match_prefix_set_v6: None,
+                    match_community: None,
                 },
                 actions: PolicyActions {
                     policy_result: PolicyAction::Permit,
                     set_metric: Some(100),
                     set_local_preference: Some(200),
+                    set_community: None,
                 },
             }],
         }],
@@ -244,6 +263,7 @@ fn test_prefix_list_serialization_shape() {
         interfaces: vec![],
         ospf: None,
         ospfv3: None,
+        isis: None,
         bgp: None,
         static_routes: vec![],
         static_routes_v6: vec![],
@@ -271,6 +291,7 @@ fn test_prefix_list_serialization_shape() {
             ],
         }],
         prefix_lists_v6: vec![],
+        community_lists: vec![],
         policies: vec![],
         unparsed_lines: vec![],
     };
@@ -336,6 +357,7 @@ fn test_golden_full() {
             area: OspfAreaId::Number(0),
             cost: Some(10),
             passive: None,
+            bfd: None,
         })
     );
     assert_eq!(
