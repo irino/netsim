@@ -84,6 +84,7 @@ pub struct VerifyOptions {
     pub interval: Duration,
     pub skip_destroy: bool,
     pub sudo: bool,
+    pub static_only: bool,
     pub clab_bin: String,
     pub docker_bin: String,
 }
@@ -98,6 +99,7 @@ impl Default for VerifyOptions {
             interval: Duration::from_secs(2),
             skip_destroy: false,
             sudo: false,
+            static_only: false,
             clab_bin: "containerlab".to_string(),
             docker_bin: "docker".to_string(),
         }
@@ -275,18 +277,29 @@ impl<'a> LabVerifier<'a> {
         Ok(())
     }
 
-    /// Query route table of a container using `vtyctl show ip route` or `vtyctl show ipv6 route`.
+    /// Query route table of a container using `vtyctl` (zebra-rs) or `vtysh` (FRR).
     pub fn get_routes(&self, container: &str, ipv6: bool) -> Result<String, VerifyError> {
         let sub = if ipv6 { "ipv6" } else { "ip" };
+        // Try vtyctl first
         let args = ["exec", container, "vtyctl", "show", sub, "route"];
-        let out = self.exec(&self.options.docker_bin, &args)?;
-        if !out.success() {
+        let out = self.exec(&self.options.docker_bin, &args);
+        if let Ok(ref cmd_out) = out {
+            if cmd_out.success() {
+                return Ok(cmd_out.stdout.clone());
+            }
+        }
+
+        // Fallback to vtysh (for FRR containers)
+        let vtysh_cmd = format!("show {} route", sub);
+        let vtysh_args = ["exec", container, "vtysh", "-c", &vtysh_cmd];
+        let vtysh_out = self.exec(&self.options.docker_bin, &vtysh_args)?;
+        if !vtysh_out.success() {
             return Err(VerifyError::Exec(format!(
-                "vtyctl route query failed for container '{}': {}",
-                container, out.stderr
+                "Route query (vtyctl/vtysh) failed for container '{}': {}",
+                container, vtysh_out.stderr
             )));
         }
-        Ok(out.stdout)
+        Ok(vtysh_out.stdout)
     }
 
     /// Check if target IP / prefix is in the routing table output.
@@ -601,6 +614,13 @@ impl<'a> LabVerifier<'a> {
 
         let (_clab, devices) = inspect_lab(&self.options.lab_dir, Some(&topo_path))?;
 
+        if self.options.static_only {
+            println!(
+                "==> Static-only verification mode enabled. Skipping Containerlab deployment."
+            );
+            return Ok(());
+        }
+
         // Check if intent file is specified or default intent.yml exists in lab_dir
         let intent_path = match &self.options.intent_file {
             Some(p) => Some(p.clone()),
@@ -866,6 +886,7 @@ assertions:
             interval: Duration::from_millis(50),
             skip_destroy: false,
             sudo: false,
+            static_only: false,
             clab_bin: "containerlab".to_string(),
             docker_bin: "docker".to_string(),
         };
@@ -908,6 +929,7 @@ assertions:
             interval: Duration::from_millis(50),
             skip_destroy: false,
             sudo: false,
+            static_only: false,
             clab_bin: "containerlab".to_string(),
             docker_bin: "docker".to_string(),
         };
@@ -951,6 +973,7 @@ assertions:
             interval: Duration::from_millis(50),
             skip_destroy: false,
             sudo: false,
+            static_only: false,
             clab_bin: "containerlab".to_string(),
             docker_bin: "docker".to_string(),
         };

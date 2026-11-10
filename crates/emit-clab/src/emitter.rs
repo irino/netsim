@@ -52,9 +52,19 @@ pub struct ClabOutput {
     pub warnings: Vec<String>,
 }
 
+/// Runtime engine for Containerlab node emulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuntimeEngine {
+    #[default]
+    Zebra,
+    Frr,
+}
+
 /// Options for Containerlab topology emission.
 #[derive(Debug, Clone)]
 pub struct EmitClabOptions {
+    pub engine: RuntimeEngine,
     pub image: String,
     pub config_dir: String,
 }
@@ -62,8 +72,27 @@ pub struct EmitClabOptions {
 impl Default for EmitClabOptions {
     fn default() -> Self {
         Self {
+            engine: RuntimeEngine::Zebra,
             image: "zebra-rs:latest".to_string(),
             config_dir: "./".to_string(),
+        }
+    }
+}
+
+impl EmitClabOptions {
+    pub fn new_frr(config_dir: impl Into<String>) -> Self {
+        Self {
+            engine: RuntimeEngine::Frr,
+            image: "quay.io/frrouting/frr:10.2.0".to_string(),
+            config_dir: config_dir.into(),
+        }
+    }
+
+    pub fn new_zebra(config_dir: impl Into<String>) -> Self {
+        Self {
+            engine: RuntimeEngine::Zebra,
+            image: "zebra-rs:latest".to_string(),
+            config_dir: config_dir.into(),
         }
     }
 }
@@ -92,19 +121,39 @@ pub fn build_clab_topology(
     sorted_devices.sort_by(|a, b| a.hostname.cmp(&b.hostname));
 
     for dev in sorted_devices {
-        let config_path = format!(
-            "{}/{}.zebra.yaml",
-            options.config_dir.trim_end_matches('/'),
-            dev.hostname
-        );
-        let bind_str = format!("{}:/etc/zebra-rs/zebra.yaml", config_path);
+        let binds = match options.engine {
+            RuntimeEngine::Zebra => {
+                let config_path = format!(
+                    "{}/{}.zebra.yaml",
+                    options.config_dir.trim_end_matches('/'),
+                    dev.hostname
+                );
+                vec![format!("{}:/etc/zebra-rs/zebra.yaml", config_path)]
+            }
+            RuntimeEngine::Frr => {
+                let conf_path = format!(
+                    "{}/{}.frr.conf",
+                    options.config_dir.trim_end_matches('/'),
+                    dev.hostname
+                );
+                let daemons_path = format!(
+                    "{}/{}.daemons",
+                    options.config_dir.trim_end_matches('/'),
+                    dev.hostname
+                );
+                vec![
+                    format!("{}:/etc/frr/frr.conf", conf_path),
+                    format!("{}:/etc/frr/daemons", daemons_path),
+                ]
+            }
+        };
 
         nodes.insert(
             dev.hostname.clone(),
             ClabNode {
                 kind: "linux".to_string(),
                 image: Some(options.image.clone()),
-                binds: vec![bind_str],
+                binds,
             },
         );
     }

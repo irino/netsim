@@ -150,6 +150,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emit-frr"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "emit-zebra"
 version = "0.1.0"
 dependencies = [
@@ -282,6 +291,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "emit-clab",
+ "emit-frr",
  "emit-zebra",
  "ir",
  "parse-eos",
@@ -289,7 +299,9 @@ dependencies = [
  "parse-ios",
  "parse-iosxr",
  "parse-junos",
+ "reachability",
  "serde",
+ "serde_json",
  "serde_yaml",
  "thiserror",
  "topology",
@@ -417,6 +429,17 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "reachability"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "topology",
+]
 
 [[package]]
 name = "ryu"

@@ -31,6 +31,7 @@ unsupported command test
     let cli = Cli {
         command: Commands::Convert {
             vendor: "ios".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -63,6 +64,7 @@ set protocols ospf area 0.0.0.0 interface ge-0/0/0.0
     let cli = Cli {
         command: Commands::Convert {
             vendor: "junos".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -102,6 +104,7 @@ router ospf 1
     let cli = Cli {
         command: Commands::Convert {
             vendor: "eos".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -144,6 +147,7 @@ router ospf 1
     let cli = Cli {
         command: Commands::Convert {
             vendor: "iosxr".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -184,6 +188,7 @@ router ospf
     let cli = Cli {
         command: Commands::Convert {
             vendor: "frr".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -210,6 +215,7 @@ fn test_convert_invalid_vendor_or_missing_file() {
     let cli = Cli {
         command: Commands::Convert {
             vendor: "ios".to_string(),
+            engine: "zebra".to_string(),
             r#in: in_file.clone(),
             out: out_file.clone(),
         },
@@ -222,6 +228,7 @@ fn test_convert_invalid_vendor_or_missing_file() {
     let cli_bad_vendor = Cli {
         command: Commands::Convert {
             vendor: "unknown_vendor".to_string(),
+            engine: "zebra".to_string(),
             r#in: dummy,
             out: out_file,
         },
@@ -269,6 +276,7 @@ router ospf 1
         command: Commands::GenLab {
             configs: configs_dir.clone(),
             out: out_dir.clone(),
+            engine: "zebra".to_string(),
             lab_name: "test-topo".to_string(),
         },
     };
@@ -306,6 +314,7 @@ fn test_gen_lab_empty_directory_error() {
         command: Commands::GenLab {
             configs: configs_dir,
             out: out_dir,
+            engine: "zebra".to_string(),
             lab_name: "test".to_string(),
         },
     };
@@ -328,6 +337,7 @@ fn test_verify_missing_lab_dir() {
             interval: 1,
             skip_destroy: false,
             sudo: false,
+            static_only: false,
             clab_bin: "containerlab".to_string(),
             docker_bin: "docker".to_string(),
         },

@@ -217,11 +217,14 @@ Routing policies and prefix lists (both IPv4 and IPv6) are supported across the 
   - BGP Peer Groups / Templates for scalable configuration parsing.
   - BFD (Bidirectional Forwarding Detection) integration aligned with `ietf-bfd`.
 
-### Phase 4: Multi-Engine & Hybrid Verification Backends
+### Phase 4: Multi-Engine & Hybrid Verification Backends (Implemented)
 - **Alternative Runtime Engine Emitters**:
-  - While zebra-rs is the primary target, adding an `emit-frr` backend would allow running emulation labs with upstream FRR container images for features not yet implemented in zebra-rs.
+  - Implemented `crates/emit-frr` backend generating declarative `frr.conf` and `daemons` configuration files.
+  - Enabled multi-engine Containerlab emulation via `--engine <zebra|frr>` supporting official FRRouting container images (`quay.io/frrouting/frr:10.2.0`).
 - **Hybrid Static + Emulation Verification**:
-  - Fast static mathematical reachability checking prior to Containerlab deployment (e.g., exporting to Batfish vendor-independent format or a lightweight reachability graph solver).
+  - Implemented `crates/reachability` static graph solver analyzing link/subnet consistency, Dijkstra shortest path trees, and all-pairs reachability matrices.
+  - Integrated `netsim check` subcommand for rapid pre-flight validation and Batfish vendor-independent JSON format export.
+  - Integrated static assertion evaluation and `netsim verify --static-only` mode.
 
 ### Phase 5: Overlay Networking & Modern Fabrics (EVPN / SRv6)
 - **VXLAN / EVPN L2/L3 Fabrics**:

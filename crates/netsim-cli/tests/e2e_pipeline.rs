@@ -104,6 +104,7 @@ fn test_e2e_ospf_3routers_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "ospf-triangle".to_string(),
         },
     };
@@ -208,6 +209,7 @@ fn test_e2e_mixed_5vendors_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "mesh-5vendor".to_string(),
         },
     };
@@ -316,6 +318,7 @@ fn test_e2e_mixed_4vendors_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "mesh-4vendor".to_string(),
         },
     };
@@ -414,6 +417,7 @@ fn test_e2e_mixed_3vendors_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "triangle-3vendor".to_string(),
         },
     };
@@ -488,6 +492,7 @@ router ospf 1
         command: Commands::GenLab {
             configs: tmp_cfg_dir.clone(),
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "lan-test".to_string(),
         },
     };
@@ -573,6 +578,7 @@ fn test_e2e_mixed_ios_junos_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "mixed-lab".to_string(),
         },
     };
@@ -653,6 +659,7 @@ fn test_e2e_ebgp_2routers_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "ebgp-p2p".to_string(),
         },
     };
@@ -742,6 +749,7 @@ fn test_e2e_mixed_5vendors_ipv6_pipeline() {
         command: Commands::GenLab {
             configs: example_dir,
             out: tmp_out.clone(),
+            engine: "zebra".to_string(),
             lab_name: "ipv6-lab".to_string(),
         },
     };
@@ -852,6 +860,7 @@ router bgp 65000
         command: Commands::GenLab {
             configs: in_dir,
             out: out_dir.clone(),
+            engine: "zebra".to_string(),
             lab_name: "phase3-lab".to_string(),
         },
     };

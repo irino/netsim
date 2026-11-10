@@ -8,7 +8,9 @@ members = [
     "crates/parse-frr",
     "crates/topology",
     "crates/emit-zebra",
+    "crates/emit-frr",
     "crates/emit-clab",
+    "crates/reachability",
     "crates/netsim-cli",
     "crates/validate-yang",
 ]
