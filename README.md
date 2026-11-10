@@ -12,8 +12,10 @@ A Rust-based multi-vendor network configuration translator and network emulation
 - `crates/parse-frr`: FRRouting / SONiC configuration parser built with `winnow`.
 - `crates/topology`: Network topology inference engine calculating point-to-point links and warnings across devices.
 - `crates/emit-zebra`: zebra-rs YAML configuration emitter conforming to authoritative zebra-rs YANG/YAML schema.
-- `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings.
-- `crates/netsim-cli`: Unified command-line interface providing `convert` and `gen-lab` subcommands.
+- `crates/emit-frr`: FRRouting (`frr.conf` and `daemons`) configuration emitter for multi-engine container emulation.
+- `crates/reachability`: Static reachability graph solver, consistency analyzer, and Batfish vendor-independent format exporter.
+- `crates/emit-clab`: Containerlab topology generator emitting `*.clab.yml` definitions with deterministic interface mappings and multi-engine support.
+- `crates/netsim-cli`: Unified command-line interface providing `convert`, `gen-lab`, `check`, and `verify` subcommands.
 - `crates/validate-yang`: Automated IETF YANG schema validation and drift testing engine backed by `libyang` (`yang3` and `holo-yang`).
 - `examples/`: Synthetic example configurations demonstrating multi-device network topologies (e.g., `examples/ospf-3routers`).
 
@@ -36,8 +38,16 @@ To translate a single Cisco IOS or Junos configuration into a declarative zebra-
 ```bash
 cargo run --bin netsim -- convert \
   --vendor ios \
+  --engine zebra \
   --in examples/ospf-3routers/R1.cfg \
   --out R1.zebra.yaml
+
+# Or convert targeting FRRouting configuration:
+cargo run --bin netsim -- convert \
+  --vendor ios \
+  --engine frr \
+  --in examples/ospf-3routers/R1.cfg \
+  --out R1.frr.conf
 ```
 
 #### Junos (set-format) Example:
@@ -74,8 +84,9 @@ cargo run --bin netsim -- convert \
 
 **Options**:
 - `--vendor <ios|junos|eos|iosxr|frr>`: Input vendor configuration format (`ios`, `junos`, `eos`, `iosxr`, or `frr`; default: `ios`).
+- `--engine <zebra|frr>`: Target runtime engine (`zebra` or `frr`; default: `zebra`).
 - `--in <FILE>`: Path to the input vendor configuration file.
-- `--out <FILE>`: Destination path for the generated zebra-rs YAML configuration.
+- `--out <FILE>`: Destination path for the generated configuration file.
 
 Any unparsed commands or emitter warnings are printed to `stderr` with line numbers and reasons.
 
@@ -117,11 +128,19 @@ cargo run --bin netsim -- gen-lab \
   --configs ./examples/mixed-5vendors/ \
   --out ./lab-mixed/ \
   --lab-name mixed-lab
+
+# Generate Containerlab environment targeting FRRouting containers (quay.io/frrouting/frr:10.2.0)
+cargo run --bin netsim -- gen-lab \
+  --configs ./examples/ospf-3routers/ \
+  --out ./lab-frr/ \
+  --engine frr \
+  --lab-name ospf-frr-lab
 ```
 
 **Options**:
 - `--configs <DIR>`: Directory containing router configuration files.
 - `--out <DIR>`: Output directory for generated artifacts.
+- `--engine <zebra|frr>`: Runtime emulation engine (`zebra` or `frr`; default: `zebra`).
 - `--lab-name <NAME>`: Name of the Containerlab topology (defaults to `netsim-lab`).
 
 #### Generated Output Structure:
@@ -171,7 +190,23 @@ sudo containerlab destroy -t lab-mixed/topology.clab.yml
 
 ---
 
-### 4. Automated Deployment & Verification (`verify` / `test`)
+### 4. Static Mathematical Reachability Checking (`check`)
+
+Run fast static mathematical reachability checking, subnet consistency analysis, and Batfish snapshot export prior to Containerlab deployment:
+
+```bash
+# Check static reachability and validate intent assertions across configurations:
+cargo run --bin netsim -- check --configs ./examples/ospf-3routers/
+
+# Check with Batfish vendor-independent format export:
+cargo run --bin netsim -- check \
+  --configs ./examples/ospf-3routers/ \
+  --export-batfish ./batfish-snapshot.json
+```
+
+---
+
+### 5. Automated Deployment & Verification (`verify` / `test`)
 
 The `verify` command (aliased to `test`) automates the entire lifecycle:
 1. Deploys the Containerlab topology (`containerlab deploy -t topology.clab.yml`).
@@ -193,6 +228,9 @@ cargo run --bin netsim -- verify \
 
 # Retain lab after verification (skip containerlab destroy)
 cargo run --bin netsim -- verify --lab-dir ./lab-ospf/ --skip-destroy
+
+# Run static-only verification without deploying containers
+cargo run --bin netsim -- verify --lab-dir ./lab-ospf/ --static-only
 ```
 
 #### Intent Assertion Specification (`intent.yml`):

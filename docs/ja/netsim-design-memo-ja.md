@@ -231,11 +231,14 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
   - 大規模設定のパースを容易にする BGP Peer Group / Template。
   - `ietf-bfd` に準拠した BFD (Bidirectional Forwarding Detection) 統合。
 
-### Phase 4: マルチエンジンとハイブリッド検証バックエンド
+### Phase 4: マルチエンジンとハイブリッド検証バックエンド（実装済み）
 - **代替ランタイムエンジンエミッタ**:
-  - zebra-rs を第一のターゲットとしつつ、`emit-frr` バックエンドを追加することで、zebra-rs で未実装の機能を上流の FRR コンテナイメージを用いてエミュレーションラボで実行可能にする。
+  - `crates/emit-frr` を実装し、宣言的 `frr.conf` および `daemons` 設定ファイルを生成。
+  - `--engine <zebra|frr>` によるマルチエンジン Containerlab ラボ生成をサポートし、公式 FRR コンテナ（`quay.io/frrouting/frr:10.2.0`）によるエミュレーションに対応。
 - **静的解析＋エミュレーションのハイブリッド検証**:
-  - Containerlab のデプロイ前に、高速な静的数理到達性検査を実行（例: Batfish のベンダー非依存フォーマットへの出力、または軽量な到達性グラフソルバーの統合）。
+  - `crates/reachability` による軽量到達性グラフソルバーを実装。サブネット不整合検査、Dijkstra 最短経路探索、全ペア到達性マトリクスを計算。
+  - `netsim check` サブコマンドを追加し、Containerlab デプロイ前の事前静的チェックおよび Batfish ベンダー非依存 JSON 出力に対応。
+  - `netsim verify --static-only` による高速静的検証に対応。
 
 ### Phase 5: オーバーレイネットワークと最新ファブリック（EVPN / SRv6）
 - **VXLAN / EVPN L2/L3 ファブリック**:
