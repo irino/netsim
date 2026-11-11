@@ -1,142 +1,61 @@
-# netsim Examples & Usage Guide
+# netsim Examples & Sample Topologies
 
-This directory contains sample network configurations demonstrating the Phase 1 workflow of `netsim`.
+This directory contains pre-configured synthetic multi-device network configurations demonstrating the features of `netsim`.
 
-## 1. Available Examples
-
-### `ospf-3routers`
-A 3-router triangle topology (`R1`, `R2`, `R3`) interconnected via point-to-point `/24` IPv4 subnets running OSPFv2 (Area 0).
-
-### `ebgp-2routers`
-A 2-router point-to-point eBGP peering scenario between AS 65001 and AS 65002 with route advertisements and static routes.
-
-### `mixed-ios-junos`
-A multi-vendor point-to-point OSPF network connecting a Cisco IOS router (`cisco-r1.cfg`) and a Junos router (`junos-r2.set`) running OSPFv2 over a `/30` point-to-point link.
-
-### `mixed-3vendors`
-A multi-vendor 3-router ring/triangle network interconnecting Cisco IOS (`cisco-r1.cfg`), Junos (`junos-r2.set`), and Arista EOS (`arista-r3.cfg`) running OSPFv2 across `/30` point-to-point links.
-
-### `mixed-4vendors`
-A multi-vendor 4-router topology interconnecting Cisco IOS (`cisco-r1.cfg`), Junos (`junos-r2.set`), Arista EOS (`arista-r3.cfg`), and Cisco IOS XR (`iosxr-r4.cfg`) running OSPFv2 across `/30` point-to-point links.
-
-### `mixed-5vendors`
-A multi-vendor 5-router topology interconnecting Cisco IOS (`cisco-r1.cfg`), Junos (`junos-r2.set`), Arista EOS (`arista-r3.cfg`), Cisco IOS XR (`iosxr-r4.cfg`), and FRRouting / SONiC (`frr-r5.cfg`) running OSPFv2 across `/30` point-to-point links.
-
-- **Topology Summary**:
-  - `R1`: Loopback0 (`1.1.1.1/32`), GigabitEthernet0/0 (`10.0.12.1/24` -> R2), GigabitEthernet0/1 (`10.0.13.1/24` -> R3)
-  - `R2`: Loopback0 (`2.2.2.2/32`), GigabitEthernet0/0 (`10.0.12.2/24` -> R1), GigabitEthernet0/1 (`10.0.23.2/24` -> R3)
-  - `R3`: Loopback0 (`3.3.3.3/32`), GigabitEthernet0/0 (`10.0.13.3/24` -> R1), GigabitEthernet0/1 (`10.0.23.3/24` -> R2)
-- **Routing Protocol**: OSPFv2 Process 1 (Router ID matching Loopback IP, network statements covering connected interfaces and loopbacks).
+For complete end-to-end documentation on how to use `netsim`, refer to:
+- **English User Guide**: [`docs/en/how-to-use.md`](../docs/en/how-to-use.md)
+- **Japanese User Guide (使い方ガイド)**: [`docs/ja/how-to-use-ja.md`](../docs/ja/how-to-use-ja.md)
 
 ---
 
-## 2. Required Input Files
+## 1. Available Sample Topologies
 
-Each device configuration file (e.g. `.cfg`, `.set`, `.conf`, or `.txt`) must follow supported vendor syntax:
-
-### Cisco IOS Syntax (`.cfg`, `.conf`, `.txt`)
-- **Hostname**: `hostname <NAME>`
-- **Interfaces**:
-  - Loopback and physical interfaces: `interface <NAME>`
-  - Description: `description <TEXT>`
-  - IPv4 address and subnet mask: `ip address <A.B.C.D> <NETMASK>`
-  - Admin state: `no shutdown` (or `shutdown`)
-- **OSPF Process**:
-  - `router ospf <PROCESS_ID>`
-  - `router-id <A.B.C.D>`
-  - `network <ADDRESS> <WILDCARD> area <AREA>`
-- **BGP / Static Routes**:
-  - `ip route <DEST> <MASK> <NEXT_HOP>`
-  - `router bgp <AS>` (`bgp router-id`, `neighbor <IP> remote-as <AS>`, `network <IP> mask <MASK>`)
-
-### Junos Set-Format Syntax (`.set`, `.conf`, `.txt`)
-- **Hostname**: `set system host-name <NAME>`
-- **Interfaces**:
-  - `set interfaces <NAME> unit <UNIT> family inet address <IP/LEN>`
-  - `description`, `disable`
-- **Routing Options**:
-  - `set routing-options router-id <IP>`
-  - `set routing-options autonomous-system <AS>`
-  - `set routing-options static route <DEST/LEN> next-hop <NEXT_HOP>`
-- **Protocols**:
-  - `set protocols ospf area <AREA> interface <NAME> [metric <COST>] [passive]`
-  - `set protocols bgp group <GROUP> neighbor <IP> peer-as <AS>`
+| Sample Directory | Devices & Vendors | Protocols & Topologies | Documentation |
+|---|---|---|---|
+| [`ospf-3routers`](ospf-3routers/) | 3x Cisco IOS (`R1`, `R2`, `R3`) | OSPFv2 (Area 0) triangle topology with operational `intent.yml` | [README](ospf-3routers/README.md) |
+| [`ebgp-2routers`](ebgp-2routers/) | 2x Cisco IOS (`r1`, `r2`) | eBGP peering (AS 65001 - AS 65002) with static routes | [README](ebgp-2routers/README.md) |
+| [`mixed-ios-junos`](mixed-ios-junos/) | Cisco IOS + Junos | 2-node `/30` point-to-point OSPFv2 Area 0 link | [README](mixed-ios-junos/README.md) |
+| [`mixed-3vendors`](mixed-3vendors/) | Cisco IOS + Junos + Arista EOS | 3-router ring topology with `/30` P2P links running OSPFv2 | [README](mixed-3vendors/README.md) |
+| [`mixed-4vendors`](mixed-4vendors/) | Cisco IOS + Junos + Arista EOS + Cisco IOS XR | 4-router multi-vendor OSPFv2 mesh | [README](mixed-4vendors/README.md) |
+| [`mixed-5vendors`](mixed-5vendors/) | Cisco IOS + Junos + Arista EOS + Cisco IOS XR + FRRouting | 5-vendor multi-device OSPFv2 network | [README](mixed-5vendors/README.md) |
+| [`mixed-5vendors-ipv6`](mixed-5vendors-ipv6/) | 5 Vendors (Cisco IOS, Junos, Arista EOS, Cisco IOS XR, FRR) | Dual-Stack IPv4 + IPv6 network running OSPFv2 and OSPFv3 | [README](mixed-5vendors-ipv6/README.md) |
 
 ---
 
-## 3. CLI Commands & Workflow
+## 2. Common Workflows on Samples
 
-The `netsim` CLI (`crates/netsim-cli`) provides two main subcommands: `convert` and `gen-lab`.
-
-### Workflow 1: Convert a Single Router Configuration
-To convert an individual Cisco IOS configuration file into a declarative zebra-rs YAML configuration:
+### Static Verification (`check`)
+Perform mathematical reachability analysis, subnet and IP conflict detection, and intent validation across any sample directory without launching containers:
 
 ```bash
-cargo run --bin netsim -- convert --vendor ios --in examples/ospf-3routers/R1.cfg --out R1.zebra.yaml
+cargo run --bin netsim -- check --configs examples/ospf-3routers/
+cargo run --bin netsim -- check --configs examples/mixed-5vendors-ipv6/
 ```
 
-**Options**:
-- `--vendor <VENDOR>`: Vendor input format (currently supports `ios`, `junos`, `eos`, `iosxr`, and `frr`).
-- `--in <FILE>`: Path to input vendor configuration file.
-- `--out <FILE>`: Path to destination zebra-rs YAML configuration file.
-
-### Workflow 2: Generate Complete Lab Environment (`gen-lab`)
-To process a directory of vendor configurations, automatically infer point-to-point interconnecting links, emit zebra-rs YAML files for every router, generate a Containerlab topology file, and produce a diagnostic summary report:
+### Lab Generation (`gen-lab`)
+Generate Containerlab definitions (`topology.clab.yml`) and configuration files for all devices:
 
 ```bash
-cargo run --bin netsim -- gen-lab --configs ./examples/ospf-3routers/ --out ./lab-output/ --lab-name ospf-lab
+# Generate zebra-rs configurations
+cargo run --bin netsim -- gen-lab \
+  --configs examples/mixed-5vendors/ \
+  --out lab-mixed/ \
+  --lab-name mixed5-lab
+
+# Generate FRRouting configurations
+cargo run --bin netsim -- gen-lab \
+  --configs examples/mixed-5vendors/ \
+  --out lab-frr/ \
+  --engine frr \
+  --lab-name mixed5-frr
 ```
 
-**Options**:
-- `--configs <DIR>`: Directory containing vendor configuration files (`.cfg`, `.conf`, `.txt`).
-- `--out <DIR>`: Output directory where generated artifacts will be written.
-- `--lab-name <NAME>`: Name of the Containerlab topology (defaults to `netsim-lab`).
+### Automated Verification (`verify` / `test`)
+Deploy the lab in Containerlab, wait for route convergence, verify loopback pings, and clean up:
 
----
-
-## 4. Expected Generated Files (`gen-lab`)
-
-Running `gen-lab` on `./examples/ospf-3routers/` generates the following files in the output directory (e.g., `./lab-output/`):
-
-1. **Node Configurations**:
-   - `R1.zebra.yaml`
-   - `R2.zebra.yaml`
-   - `R3.zebra.yaml`
-   - *Description*: Declarative YAML configurations conforming to the zebra-rs schema, containing hostname, loopback/physical interface IPv4 addresses, and OSPFv2 router-id, areas, and interfaces.
-2. **Containerlab Topology Definition**:
-   - `topology.clab.yml`
-   - *Description*: Containerlab topology file (`kind: linux`) that binds each router container to its corresponding `zebra.yaml` configuration via bind mounts, alphabetically maps physical interfaces (e.g., `GigabitEthernet0/0` -> `eth1`), and connects endpoints according to inferred point-to-point links.
-3. **Diagnostic Report**:
-   - `report.md`
-   - *Description*: Markdown report detailing processed devices, inferred links, topology warnings, unparsed configuration lines, and emitter warnings.
-
----
-
-## 5. Basic End-to-End Simulation Workflow
-
-1. **Translate**: Run `netsim gen-lab` on your vendor configuration directory.
-2. **Deploy**: Deploy the generated Containerlab topology:
-   ```bash
-   sudo containerlab deploy -t lab-output/topology.clab.yml
-   ```
-3. **Verify**: Access container shells or run zebra-rs CLI (`vtyctl`) to check OSPF neighbor adjacencies (`show ip ospf neighbor`), routing tables (`show ip route`), and reachability (`ping`).
-4. **Destroy**: Clean up the container lab when finished:
-   ```bash
-   sudo containerlab destroy -t lab-output/topology.clab.yml
-   ```
-
----
-
-## 6. Unsupported Configuration Features & Current Limitations
-
-- **Parser Limitations (Cisco IOS Phase 1)**:
-  - Only `hostname`, `interface` (Loopback/GigabitEthernet/Ethernet with `description`, `ip address`, `shutdown`/`no shutdown`), and `router ospf` (`router-id`, `network` statement) are parsed.
-  - All other configuration commands (e.g. ACLs, static routes, BGP, route-maps, prefix-lists, spanning-tree) are skipped and reported as `UnparsedLine` diagnostics.
-- **zebra-rs Emitter Limitations**:
-  - **Interface Descriptions**: Not supported in top-level zebra-rs interface schema; emitted as diagnostic `interface-description` warnings.
-  - **Admin-Down State**: zebra-rs does not have an explicit administrative shutdown knob; emitted as `interface-disabled` warnings.
-  - **Multiple OSPF Processes**: zebra-rs supports a single OSPF instance; process IDs other than `1` emit `ospf-process-id` warnings.
-- **Topology Inference Limitations**:
-  - Point-to-point links (subnets with exactly 2 participating device interfaces) are fully inferred.
-  - Shared multi-access segments (subnets with 3 or more device interfaces) trigger a topology warning in `report.md`.
-  - Loopbacks and unnumbered/unconfigured interfaces are ignored during topology inference.
+```bash
+cargo run --bin netsim -- verify \
+  --lab-dir lab-frr/ \
+  --sudo \
+  --timeout 90
+```
