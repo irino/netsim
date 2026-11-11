@@ -44,6 +44,98 @@ pub struct ZebraInterfaceIpv6 {
     pub address: Vec<String>,
 }
 
+/// zebra-rs VXLAN VNI binding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraVxlanBinding {
+    pub vni: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+}
+
+/// zebra-rs interface VXLAN / VTEP configuration (`interface -> vxlan`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraInterfaceVxlan {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_interface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_ip: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vni: Vec<ZebraVxlanBinding>,
+}
+
+/// zebra-rs BGP EVPN neighbor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgpEvpnNeighbor {
+    pub peer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector_client: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+}
+
+/// zebra-rs BGP EVPN address-family configuration (`router -> bgp -> evpn`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraBgpEvpn {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advertise_all_vni: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advertise_default_gw: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbor: Vec<ZebraBgpEvpnNeighbor>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// zebra-rs SRv6 micro-segment (uSID) parameters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraSrV6Usid {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_length: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_length: Option<u8>,
+}
+
+/// zebra-rs SRv6 locator configuration (`segment-routing -> srv6 -> locators -> locator`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraSrV6Locator {
+    pub name: String,
+    pub prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub micro_segment: Option<ZebraSrV6Usid>,
+}
+
+/// zebra-rs SRv6 configuration (`segment-routing -> srv6`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraSrV6 {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encapsulation_source_address: Option<Ipv6Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locator: Vec<ZebraSrV6Locator>,
+}
+
+/// zebra-rs Segment Routing container (`segment-routing`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ZebraSegmentRouting {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srv6: Option<ZebraSrV6>,
+}
+
 /// zebra-rs static route entry (`ip -> route`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ZebraStaticRoute {
@@ -73,6 +165,8 @@ pub struct ZebraInterface {
     pub ipv4: Option<ZebraInterfaceIpv4>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ipv6: Option<ZebraInterfaceIpv6>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vxlan: Option<ZebraInterfaceVxlan>,
 }
 
 /// zebra-rs OSPF interface entry (`router -> ospf -> area -> interface`).
@@ -225,6 +319,8 @@ pub struct ZebraBgp {
     pub neighbor_v6: Vec<ZebraBgpNeighborV6>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub network_v6: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evpn: Option<ZebraBgpEvpn>,
 }
 
 /// zebra-rs routing protocols container (`router`).
@@ -325,6 +421,8 @@ pub struct ZebraConfig {
     pub policy: Vec<ZebraPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub router: Option<ZebraRouter>,
+    #[serde(rename = "segment-routing", skip_serializing_if = "Option::is_none")]
+    pub segment_routing: Option<ZebraSegmentRouting>,
 }
 
 /// Result of emitting a zebra-rs configuration containing the YAML output and explicit warnings.
@@ -419,10 +517,25 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             address: vec![prefix.to_string()],
         });
 
+        let vxlan = iface.vxlan.as_ref().map(|vx| ZebraInterfaceVxlan {
+            source_interface: vx.source_interface.clone(),
+            local_ip: vx.local_ip,
+            udp_port: vx.udp_port,
+            vni: vx
+                .vni_bindings
+                .iter()
+                .map(|b| ZebraVxlanBinding {
+                    vni: b.vni,
+                    vlan: b.vlan,
+                })
+                .collect(),
+        });
+
         interfaces.push(ZebraInterface {
             name: iface.name.clone(),
             ipv4,
             ipv6,
+            vxlan,
         });
 
         // Collect OSPF interface participation if present
@@ -756,6 +869,21 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             bgp_proc.networks_v6.iter().map(|p| p.to_string()).collect();
         networks_v6.sort();
 
+        let evpn = bgp_proc.evpn.as_ref().map(|e| ZebraBgpEvpn {
+            enabled: e.enabled,
+            advertise_all_vni: e.advertise_all_vni,
+            advertise_default_gw: e.advertise_default_gw,
+            neighbor: e
+                .neighbors
+                .iter()
+                .map(|n| ZebraBgpEvpnNeighbor {
+                    peer: n.peer.clone(),
+                    route_reflector_client: n.route_reflector_client,
+                    send_community: n.send_community.clone(),
+                })
+                .collect(),
+        });
+
         Some(ZebraBgp {
             as_number: bgp_proc.as_number,
             router_id: bgp_proc.router_id,
@@ -765,6 +893,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             network: networks,
             neighbor_v6: neighbors_v6,
             network_v6: networks_v6,
+            evpn,
         })
     } else {
         None
@@ -784,6 +913,28 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
     warnings.sort();
     warnings.dedup();
 
+    let segment_routing = device.segment_routing.as_ref().and_then(|sr| {
+        sr.srv6.as_ref().map(|srv6| ZebraSegmentRouting {
+            srv6: Some(ZebraSrV6 {
+                enabled: srv6.enabled,
+                encapsulation_source_address: srv6.encapsulation_source_address,
+                locator: srv6
+                    .locators
+                    .iter()
+                    .map(|loc| ZebraSrV6Locator {
+                        name: loc.name.clone(),
+                        prefix: loc.prefix.to_string(),
+                        micro_segment: loc.micro_segment.as_ref().map(|u| ZebraSrV6Usid {
+                            enabled: u.enabled,
+                            block_length: u.block_length,
+                            node_length: u.node_length,
+                        }),
+                    })
+                    .collect(),
+            }),
+        })
+    });
+
     (
         ZebraConfig {
             system,
@@ -794,6 +945,7 @@ pub fn build_zebra_config(device: &DeviceConfig) -> (ZebraConfig, Vec<EmitWarnin
             community_set: community_sets,
             policy: policies,
             router,
+            segment_routing,
         },
         warnings,
     )

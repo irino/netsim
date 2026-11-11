@@ -94,6 +94,7 @@ fn test_serde_serialization_deserialization() {
                 bfd: None,
             }),
             isis: None,
+            vxlan: None,
         }],
         ospf: Some(OspfProcess {
             process_id: 1,
@@ -129,7 +130,9 @@ fn test_serde_serialization_deserialization() {
                 bfd: None,
             }],
             networks_v6: vec!["2001:db8:1::/64".parse().unwrap()],
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: vec![StaticRoute {
             destination: "192.168.0.0/16".parse().unwrap(),
             next_hop: std::net::Ipv4Addr::new(10, 0, 0, 2),
@@ -265,6 +268,7 @@ fn test_prefix_list_serialization_shape() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: vec![],
         static_routes_v6: vec![],
         prefix_lists: vec![PrefixList {
@@ -369,4 +373,87 @@ fn test_golden_full() {
     );
     assert!(config.prefix_lists.is_empty());
     assert_eq!(config.unparsed_lines.len(), 1);
+}
+
+#[test]
+fn test_evpn_and_srv6_ir_serialization() {
+    let dev = DeviceConfig {
+        hostname: "leaf1".to_string(),
+        interfaces: vec![Interface {
+            name: "vxlan1".to_string(),
+            description: Some("VTEP interface".to_string()),
+            enabled: true,
+            ipv4: None,
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: Some(InterfaceVxlanConfig {
+                source_interface: Some("Loopback0".to_string()),
+                local_ip: Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+                udp_port: Some(4789),
+                vni_bindings: vec![
+                    VniVlanBinding {
+                        vni: 10010,
+                        vlan: Some(10),
+                    },
+                    VniVlanBinding {
+                        vni: 10020,
+                        vlan: Some(20),
+                    },
+                ],
+                default_vni: None,
+            }),
+        }],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            cluster_id: None,
+            peer_groups: vec![],
+            neighbors: vec![],
+            networks: vec![],
+            neighbors_v6: vec![],
+            networks_v6: vec![],
+            evpn: Some(BgpEvpnConfig {
+                enabled: true,
+                advertise_all_vni: Some(true),
+                advertise_default_gw: Some(true),
+                neighbors: vec![BgpEvpnNeighbor {
+                    peer: "10.0.0.100".to_string(),
+                    route_reflector_client: None,
+                    send_community: Some("extended".to_string()),
+                }],
+            }),
+        }),
+        segment_routing: Some(SegmentRoutingConfig {
+            srv6: Some(SrV6Config {
+                enabled: true,
+                encapsulation_source_address: Some("2001:db8:1::1".parse().unwrap()),
+                locators: vec![SrV6Locator {
+                    name: "loc1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: Some(SrV6UsidConfig {
+                        enabled: true,
+                        block_length: Some(16),
+                        node_length: Some(16),
+                    }),
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let json_str = serde_json::to_string_pretty(&dev).unwrap();
+    let deserialized: DeviceConfig = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(dev, deserialized);
 }

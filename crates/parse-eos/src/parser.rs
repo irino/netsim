@@ -1,10 +1,12 @@
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
-    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
-    Ipv6PrefixLength, Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId,
-    OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
-    PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
-    PrefixRangeV6, StaticRoute, UnparsedLine,
+    BgpEvpnConfig, BgpEvpnNeighbor, BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess,
+    CommunityList, CommunityListEntry, DeviceConfig, Interface, InterfaceIsisConfig,
+    InterfaceOspfConfig, InterfaceVxlanConfig, Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength,
+    Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
+    PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement, PrefixLength, PrefixList,
+    PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange, PrefixRangeV6,
+    SegmentRoutingConfig, SrV6Config, SrV6Locator, SrV6UsidConfig, StaticRoute, UnparsedLine,
+    VniVlanBinding,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -52,6 +54,14 @@ enum Context {
         neighbors_v6: Vec<BgpNeighborV6>,
         networks_v6: Vec<Ipv6Prefix>,
         in_af_ipv6: bool,
+        in_af_evpn: bool,
+        evpn: Option<BgpEvpnConfig>,
+    },
+    SegmentRouting {
+        srv6: Option<SrV6Config>,
+        in_srv6: bool,
+        in_locators: bool,
+        current_locator: Option<SrV6Locator>,
     },
     RouteMap(ParsedRouteMapClause),
 }
@@ -166,6 +176,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut isis_process: Option<IsisProcess> = None;
     let mut isis_passive_interfaces: Vec<String> = Vec::new();
     let mut bgp_process: Option<BgpProcess> = None;
+    let mut segment_routing: Option<SegmentRoutingConfig> = None;
     let mut community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut static_routes = Vec::new();
     let mut static_routes_v6 = Vec::new();
@@ -219,6 +230,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     networks,
                     neighbors_v6,
                     networks_v6,
+                    evpn,
                     ..
                 } => {
                     bgp_process = Some(BgpProcess {
@@ -230,7 +242,26 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         networks,
                         neighbors_v6,
                         networks_v6,
+                        evpn,
                     });
+                }
+                Context::SegmentRouting {
+                    srv6,
+                    mut current_locator,
+                    ..
+                } => {
+                    let mut srv6_cfg = srv6.unwrap_or_default();
+                    if let Some(loc) = current_locator.take() {
+                        srv6_cfg.locators.push(loc);
+                    }
+                    if !srv6_cfg.locators.is_empty()
+                        || srv6_cfg.encapsulation_source_address.is_some()
+                    {
+                        segment_routing = Some(SegmentRoutingConfig {
+                            srv6: Some(srv6_cfg),
+                            mpls: None,
+                        });
+                    }
                 }
                 Context::RouteMap(clause) => {
                     route_maps.push(clause);
@@ -280,6 +311,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     networks,
                     neighbors_v6,
                     networks_v6,
+                    evpn,
                     ..
                 } => {
                     bgp_process = Some(BgpProcess {
@@ -291,7 +323,26 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         networks,
                         neighbors_v6,
                         networks_v6,
+                        evpn,
                     });
+                }
+                Context::SegmentRouting {
+                    srv6,
+                    mut current_locator,
+                    ..
+                } => {
+                    let mut srv6_cfg = srv6.unwrap_or_default();
+                    if let Some(loc) = current_locator.take() {
+                        srv6_cfg.locators.push(loc);
+                    }
+                    if !srv6_cfg.locators.is_empty()
+                        || srv6_cfg.encapsulation_source_address.is_some()
+                    {
+                        segment_routing = Some(SegmentRoutingConfig {
+                            srv6: Some(srv6_cfg),
+                            mpls: None,
+                        });
+                    }
                 }
                 Context::RouteMap(clause) => {
                     route_maps.push(clause);
@@ -328,10 +379,25 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 }
                 Context::Bgp { .. } => {
                     line.starts_with("router-id ")
+                        || line.starts_with("cluster-id ")
                         || line.starts_with("neighbor ")
                         || line.starts_with("network ")
                         || line.starts_with("address-family ")
+                        || line.starts_with("advertise-all-vni")
+                        || line.starts_with("advertise all-vni")
+                        || line.starts_with("advertise-default-gw")
                         || line == "exit-address-family"
+                }
+                Context::SegmentRouting { .. } => {
+                    line.starts_with("srv6")
+                        || line.starts_with("encapsulation")
+                        || line.starts_with("source-address ")
+                        || line.starts_with("locators")
+                        || line.starts_with("locator ")
+                        || line.starts_with("prefix ")
+                        || line.starts_with("micro-segment ")
+                        || line == "exit"
+                        || line == "!"
                 }
                 Context::RouteMap(..) => {
                     line.starts_with("match ")
@@ -371,6 +437,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         networks,
                         neighbors_v6,
                         networks_v6,
+                        evpn,
                         ..
                     } => {
                         bgp_process = Some(BgpProcess {
@@ -382,10 +449,29 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             networks,
                             neighbors_v6,
                             networks_v6,
+                            evpn,
                         });
                     }
                     Context::RouteMap(clause) => {
                         route_maps.push(clause);
+                    }
+                    Context::SegmentRouting {
+                        srv6,
+                        mut current_locator,
+                        ..
+                    } => {
+                        let mut srv6_cfg = srv6.unwrap_or_default();
+                        if let Some(loc) = current_locator.take() {
+                            srv6_cfg.locators.push(loc);
+                        }
+                        if !srv6_cfg.locators.is_empty()
+                            || srv6_cfg.encapsulation_source_address.is_some()
+                        {
+                            segment_routing = Some(SegmentRoutingConfig {
+                                srv6: Some(srv6_cfg),
+                                mpls: None,
+                            });
+                        }
                     }
                     Context::Global => {}
                 }
@@ -423,6 +509,13 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ospf: None,
                             ospfv3: None,
                             isis: None,
+                            vxlan: if iface_name.trim().to_lowercase().starts_with("vxlan")
+                                || iface_name.trim().to_lowercase().starts_with("nve")
+                            {
+                                Some(InterfaceVxlanConfig::default())
+                            } else {
+                                None
+                            },
                         });
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -499,6 +592,8 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 neighbors_v6: Vec::new(),
                                 networks_v6: Vec::new(),
                                 in_af_ipv6: false,
+                                in_af_evpn: false,
+                                evpn: None,
                             };
                         } else {
                             unparsed_lines.push(UnparsedLine {
@@ -822,6 +917,13 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 });
                         }
                     }
+                } else if line == "segment-routing" || line.starts_with("segment-routing ") {
+                    ctx = Context::SegmentRouting {
+                        srv6: None,
+                        in_srv6: false,
+                        in_locators: false,
+                        current_locator: None,
+                    };
                 } else if let Some(rm_tail) = line.strip_prefix("route-map ") {
                     let tokens: Vec<&str> = rm_tail.split_whitespace().collect();
                     if tokens.is_empty() {
@@ -1285,6 +1387,32 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     iface.enabled = false;
                 } else if line == "no shutdown" {
                     iface.enabled = true;
+                } else if let Some(stripped) = line.strip_prefix("vxlan source-interface ") {
+                    let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                    cfg.source_interface = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("vxlan udp-port ") {
+                    if let Ok(port) = stripped.trim().parse::<u16>() {
+                        let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                        cfg.udp_port = Some(port);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("vxlan vlan ") {
+                    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+                    if tokens.len() >= 3 && tokens[1] == "vni" {
+                        if let (Ok(vlan), Ok(vni)) =
+                            (tokens[0].parse::<u16>(), tokens[2].parse::<u32>())
+                        {
+                            let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                            cfg.vni_bindings.push(VniVlanBinding {
+                                vni,
+                                vlan: Some(vlan),
+                            });
+                        }
+                    }
+                } else if let Some(stripped) = line.strip_prefix("vxlan default-vni ") {
+                    if let Ok(vni) = stripped.trim().parse::<u32>() {
+                        let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                        cfg.default_vni = Some(vni);
+                    }
                 } else {
                     unparsed_lines.push(UnparsedLine {
                         file_path: filename.map(String::from),
@@ -1333,6 +1461,70 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         content: line.to_string(),
                         reason: "unsupported OSPFv3 command".to_string(),
                     });
+                }
+            }
+            Context::SegmentRouting {
+                ref mut srv6,
+                ref mut in_srv6,
+                ref mut in_locators,
+                ref mut current_locator,
+            } => {
+                if line == "srv6" {
+                    *in_srv6 = true;
+                    if srv6.is_none() {
+                        *srv6 = Some(SrV6Config {
+                            enabled: true,
+                            encapsulation_source_address: None,
+                            locators: Vec::new(),
+                        });
+                    }
+                } else if line == "locators" {
+                    *in_locators = true;
+                } else if let Some(stripped) = line.strip_prefix("source-address ") {
+                    if let Ok(ip6) = stripped.trim().parse::<Ipv6Addr>() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.encapsulation_source_address = Some(ip6);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("locator ") {
+                    if let Some(prev) = current_locator.take() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.locators.push(prev);
+                    }
+                    let loc_name = stripped.trim().to_string();
+                    *current_locator = Some(SrV6Locator {
+                        name: loc_name,
+                        prefix: "::/0".parse().unwrap(),
+                        micro_segment: None,
+                    });
+                } else if let Some(stripped) = line.strip_prefix("prefix ") {
+                    let parts: Vec<&str> = stripped.split_whitespace().collect();
+                    if let Some(pfx_str) = parts.first().copied() {
+                        if let Ok(pfx) = pfx_str.parse::<Ipv6Prefix>() {
+                            if let Some(ref mut loc) = current_locator {
+                                loc.prefix = pfx;
+                                if parts.iter().any(|&p| p == "micro-segment" || p == "unode") {
+                                    loc.micro_segment = Some(SrV6UsidConfig {
+                                        enabled: true,
+                                        block_length: Some(16),
+                                        node_length: Some(16),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } else if line.starts_with("micro-segment ") {
+                    if let Some(ref mut loc) = current_locator {
+                        loc.micro_segment = Some(SrV6UsidConfig {
+                            enabled: true,
+                            block_length: Some(16),
+                            node_length: Some(16),
+                        });
+                    }
+                } else if line == "!" || line == "exit" {
+                    if let Some(prev) = current_locator.take() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.locators.push(prev);
+                    }
                 }
             }
             Context::RouteMap(ref mut clause) => {
@@ -1480,6 +1672,8 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 ref mut neighbors_v6,
                 ref mut networks_v6,
                 ref mut in_af_ipv6,
+                ref mut in_af_evpn,
+                ref mut evpn,
             } => {
                 if line.starts_with("cluster-id ") {
                     let mut s = line;
@@ -1491,8 +1685,30 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 }
                 if line.starts_with("address-family ipv6") {
                     *in_af_ipv6 = true;
+                    *in_af_evpn = false;
+                } else if line.starts_with("address-family evpn")
+                    || line.starts_with("address-family l2vpn evpn")
+                {
+                    *in_af_evpn = true;
+                    *in_af_ipv6 = false;
+                    let cfg = evpn.get_or_insert_with(Default::default);
+                    cfg.enabled = true;
                 } else if line == "exit-address-family" || line == "exit" {
                     *in_af_ipv6 = false;
+                    *in_af_evpn = false;
+                } else if *in_af_evpn && line.starts_with("neighbor ") {
+                    let tokens: Vec<&str> = line.split_whitespace().collect();
+                    if tokens.len() >= 3 && tokens[2] == "activate" {
+                        let target = tokens[1].to_string();
+                        let cfg = evpn.get_or_insert_with(Default::default);
+                        if !cfg.neighbors.iter().any(|n| n.peer == target) {
+                            cfg.neighbors.push(BgpEvpnNeighbor {
+                                peer: target,
+                                route_reflector_client: None,
+                                send_community: None,
+                            });
+                        }
+                    }
                 } else if line.starts_with("router-id ") {
                     let mut s = line;
                     let parsed_rid: PResult<(&str, &str, Ipv4Addr)> =
@@ -1771,6 +1987,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             networks,
             neighbors_v6,
             networks_v6,
+            evpn,
             ..
         } => {
             bgp_process = Some(BgpProcess {
@@ -1782,7 +1999,24 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 networks,
                 neighbors_v6,
                 networks_v6,
+                evpn,
             });
+        }
+        Context::SegmentRouting {
+            srv6,
+            mut current_locator,
+            ..
+        } => {
+            let mut srv6_cfg = srv6.unwrap_or_default();
+            if let Some(loc) = current_locator.take() {
+                srv6_cfg.locators.push(loc);
+            }
+            if !srv6_cfg.locators.is_empty() || srv6_cfg.encapsulation_source_address.is_some() {
+                segment_routing = Some(SegmentRoutingConfig {
+                    srv6: Some(srv6_cfg),
+                    mpls: None,
+                });
+            }
         }
         Context::RouteMap(clause) => {
             route_maps.push(clause);
@@ -1875,6 +2109,7 @@ pub fn parse_eos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         ospfv3: ospfv3_process,
         isis: isis_process,
         bgp: bgp_process,
+        segment_routing,
         static_routes,
         static_routes_v6,
         prefix_lists,

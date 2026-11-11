@@ -28,6 +28,7 @@ fn test_emit_frr_basic() {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "lo".to_string(),
@@ -43,6 +44,7 @@ fn test_emit_frr_basic() {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -52,6 +54,7 @@ fn test_emit_frr_basic() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: vec![StaticRoute {
             destination: Ipv4Prefix::from_str("192.168.1.0/24").unwrap(),
             next_hop: Ipv4Addr::new(10, 0, 12, 2),
@@ -105,6 +108,7 @@ fn test_emit_frr_advanced_protocols() {
                 passive: None,
                 bfd: Some(true),
             }),
+            vxlan: None,
         }],
         ospf: None,
         ospfv3: Some(Ospf6Process {
@@ -148,7 +152,9 @@ fn test_emit_frr_advanced_protocols() {
                 bfd: Some(true),
             }],
             networks_v6: vec![Ipv6Prefix::from_str("2001:db8:100::/48").unwrap()],
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: vec![PrefixList {
@@ -228,4 +234,90 @@ fn test_emit_frr_advanced_protocols() {
     assert!(res.daemons.contains("ospf6d=yes"));
     assert!(res.daemons.contains("isisd=yes"));
     assert!(res.daemons.contains("bfdd=yes"));
+}
+
+#[test]
+fn test_frr_evpn_vxlan_and_srv6_emission() {
+    let dev = DeviceConfig {
+        hostname: "frr-fabric".to_string(),
+        interfaces: vec![Interface {
+            name: "vxlan1".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: None,
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: Some(ir::InterfaceVxlanConfig {
+                source_interface: None,
+                local_ip: Some("10.0.0.1".parse().unwrap()),
+                udp_port: Some(4789),
+                vni_bindings: vec![ir::VniVlanBinding {
+                    vni: 10010,
+                    vlan: None,
+                }],
+                default_vni: Some(10010),
+            }),
+        }],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some("10.0.0.1".parse().unwrap()),
+            cluster_id: None,
+            peer_groups: vec![],
+            neighbors: vec![],
+            networks: vec![],
+            neighbors_v6: vec![],
+            networks_v6: vec![],
+            evpn: Some(ir::BgpEvpnConfig {
+                enabled: true,
+                advertise_all_vni: Some(true),
+                advertise_default_gw: Some(true),
+                neighbors: vec![ir::BgpEvpnNeighbor {
+                    peer: "10.0.0.100".to_string(),
+                    route_reflector_client: Some(true),
+                    send_community: Some("extended".to_string()),
+                }],
+            }),
+        }),
+        segment_routing: Some(ir::SegmentRoutingConfig {
+            srv6: Some(ir::SrV6Config {
+                enabled: true,
+                encapsulation_source_address: Some("2001:db8:1::1".parse().unwrap()),
+                locators: vec![ir::SrV6Locator {
+                    name: "LOC1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: Some(ir::SrV6UsidConfig {
+                        enabled: true,
+                        block_length: Some(16),
+                        node_length: Some(16),
+                    }),
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let (conf, _) = emit_frr_conf(&dev);
+    assert!(conf.contains("interface vxlan1"));
+    assert!(conf.contains("vxlan id 10010"));
+    assert!(conf.contains("vxlan local-tunnelip 10.0.0.1"));
+    assert!(conf.contains("address-family l2vpn evpn"));
+    assert!(conf.contains("neighbor 10.0.0.100 activate"));
+    assert!(conf.contains("neighbor 10.0.0.100 route-reflector-client"));
+    assert!(conf.contains("advertise-all-vni"));
+    assert!(conf.contains("segment-routing"));
+    assert!(conf.contains("srv6"));
+    assert!(conf.contains("source-address 2001:db8:1::1"));
+    assert!(conf.contains("prefix fc00:0:1::/48 micro-segment behavior unode"));
 }

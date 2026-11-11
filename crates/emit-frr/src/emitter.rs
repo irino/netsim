@@ -176,6 +176,18 @@ pub fn emit_frr_conf(device: &DeviceConfig) -> (String, Vec<FrrEmitWarning>) {
             }
         }
 
+        if let Some(ref vxlan) = iface.vxlan {
+            if let Some(vni) = vxlan
+                .default_vni
+                .or_else(|| vxlan.vni_bindings.first().map(|b| b.vni))
+            {
+                writeln!(out, " vxlan id {}", vni).unwrap();
+            }
+            if let Some(ip) = vxlan.local_ip {
+                writeln!(out, " vxlan local-tunnelip {}", ip).unwrap();
+            }
+        }
+
         if !iface.enabled {
             writeln!(out, " shutdown").unwrap();
         }
@@ -378,6 +390,29 @@ pub fn emit_frr_conf(device: &DeviceConfig) -> (String, Vec<FrrEmitWarning>) {
             writeln!(out, " exit-address-family").unwrap();
         }
 
+        // Address Family L2VPN EVPN
+        if let Some(ref evpn) = bgp.evpn {
+            if evpn.enabled {
+                writeln!(out, " address-family l2vpn evpn").unwrap();
+                for n in &evpn.neighbors {
+                    writeln!(out, "  neighbor {} activate", n.peer).unwrap();
+                    if n.route_reflector_client == Some(true) {
+                        writeln!(out, "  neighbor {} route-reflector-client", n.peer).unwrap();
+                    }
+                    if let Some(ref comm) = n.send_community {
+                        writeln!(out, "  neighbor {} send-community {}", n.peer, comm).unwrap();
+                    }
+                }
+                if evpn.advertise_all_vni == Some(true) {
+                    writeln!(out, "  advertise-all-vni").unwrap();
+                }
+                if evpn.advertise_default_gw == Some(true) {
+                    writeln!(out, "  advertise-default-gw").unwrap();
+                }
+                writeln!(out, " exit-address-family").unwrap();
+            }
+        }
+
         writeln!(out, "!").unwrap();
     }
 
@@ -501,6 +536,38 @@ pub fn emit_frr_conf(device: &DeviceConfig) -> (String, Vec<FrrEmitWarning>) {
 
     warnings.sort();
     warnings.dedup();
+
+    // Segment Routing
+    if let Some(ref sr) = device.segment_routing {
+        if let Some(ref srv6) = sr.srv6 {
+            if srv6.enabled {
+                writeln!(out, "segment-routing").unwrap();
+                writeln!(out, " srv6").unwrap();
+                if let Some(src) = srv6.encapsulation_source_address {
+                    writeln!(out, "  encapsulation").unwrap();
+                    writeln!(out, "   source-address {}", src).unwrap();
+                }
+                if !srv6.locators.is_empty() {
+                    writeln!(out, "  locators").unwrap();
+                    for loc in &srv6.locators {
+                        writeln!(out, "   locator {}", loc.name).unwrap();
+                        let usid_str = if loc
+                            .micro_segment
+                            .as_ref()
+                            .map(|u| u.enabled)
+                            .unwrap_or(false)
+                        {
+                            " micro-segment behavior unode"
+                        } else {
+                            ""
+                        };
+                        writeln!(out, "    prefix {}{}", loc.prefix, usid_str).unwrap();
+                    }
+                }
+                writeln!(out, "!").unwrap();
+            }
+        }
+    }
 
     (out, warnings)
 }

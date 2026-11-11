@@ -317,3 +317,64 @@ router bgp 65000
         Some("65000:500")
     );
 }
+
+#[test]
+fn test_parse_eos_evpn_vxlan_and_srv6() {
+    let input = r#"
+hostname eos-leaf1
+!
+interface Vxlan1
+   vxlan source-interface Loopback0
+   vxlan udp-port 4789
+   vxlan vlan 10 vni 10010
+   vxlan vlan 20 vni 10020
+!
+router bgp 65001
+   router-id 10.0.0.1
+   neighbor 10.0.0.100 remote-as 65001
+   address-family evpn
+      neighbor 10.0.0.100 activate
+!
+segment-routing
+   srv6
+      encapsulation
+         source-address 2001:db8:1::1
+      locators
+         locator LOC1
+            prefix fc00:0:1::/48
+            micro-segment behavior unode
+!
+"#;
+
+    let config = parse_eos_config(input, Some("eos-leaf1.cfg"));
+    assert_eq!(config.hostname, "eos-leaf1");
+
+    let vx = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "Vxlan1")
+        .expect("Vxlan1");
+    let vxlan = vx.vxlan.as_ref().expect("vxlan");
+    assert_eq!(vxlan.source_interface.as_deref(), Some("Loopback0"));
+    assert_eq!(vxlan.udp_port, Some(4789));
+    assert_eq!(vxlan.vni_bindings.len(), 2);
+    assert_eq!(vxlan.vni_bindings[0].vni, 10010);
+    assert_eq!(vxlan.vni_bindings[0].vlan, Some(10));
+
+    let bgp = config.bgp.expect("bgp");
+    let evpn = bgp.evpn.expect("evpn");
+    assert!(evpn.enabled);
+    assert_eq!(evpn.neighbors.len(), 1);
+    assert_eq!(evpn.neighbors[0].peer, "10.0.0.100");
+
+    let sr = config.segment_routing.expect("sr");
+    let srv6 = sr.srv6.expect("srv6");
+    assert_eq!(
+        srv6.encapsulation_source_address,
+        Some("2001:db8:1::1".parse().unwrap())
+    );
+    assert_eq!(srv6.locators.len(), 1);
+    assert_eq!(srv6.locators[0].name, "LOC1");
+    assert_eq!(srv6.locators[0].prefix, "fc00:0:1::/48".parse().unwrap());
+    assert!(srv6.locators[0].micro_segment.as_ref().unwrap().enabled);
+}

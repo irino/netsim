@@ -19,6 +19,7 @@ fn test_frr_golden_roundtrip() {
                 ospf: None,
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "eth1".to_string(),
@@ -34,6 +35,7 @@ fn test_frr_golden_roundtrip() {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -43,6 +45,7 @@ fn test_frr_golden_roundtrip() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: vec![StaticRoute {
             destination: Ipv4Prefix::from_str("0.0.0.0/0").unwrap(),
             next_hop: Ipv4Addr::new(192, 168, 100, 1),

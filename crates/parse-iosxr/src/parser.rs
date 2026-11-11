@@ -1,10 +1,12 @@
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
-    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
-    Ipv6PrefixLength, Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId,
-    OspfProcess, PolicyAction, PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement,
-    PrefixLength, PrefixList, PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange,
-    PrefixRangeV6, StaticRoute, UnparsedLine,
+    BgpEvpnConfig, BgpEvpnNeighbor, BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess,
+    CommunityList, CommunityListEntry, DeviceConfig, Interface, InterfaceIsisConfig,
+    InterfaceOspfConfig, InterfaceVxlanConfig, Ipv4Prefix, Ipv6Prefix, Ipv6PrefixLength,
+    Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
+    PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement, PrefixLength, PrefixList,
+    PrefixListEntry, PrefixListEntryV6, PrefixListV6, PrefixRange, PrefixRangeV6,
+    SegmentRoutingConfig, SrV6Config, SrV6Locator, SrV6UsidConfig, StaticRoute, UnparsedLine,
+    VniVlanBinding,
 };
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -83,11 +85,19 @@ enum Context {
         current_peer_group: Option<String>,
         in_af_ipv4: bool,
         in_af_ipv6: bool,
+        in_af_evpn: bool,
         peer_groups: BTreeMap<String, BgpPeerGroup>,
         neighbors: BTreeMap<Ipv4Addr, RawBgpPeer>,
         networks: Vec<Ipv4Prefix>,
         neighbors_v6: BTreeMap<Ipv6Addr, RawBgpPeer>,
         networks_v6: Vec<Ipv6Prefix>,
+        evpn: Option<BgpEvpnConfig>,
+    },
+    SegmentRouting {
+        srv6: Option<SrV6Config>,
+        in_srv6: bool,
+        in_locators: bool,
+        current_locator: Option<SrV6Locator>,
     },
     Static {
         in_af_ipv4: bool,
@@ -203,6 +213,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut isis_process: Option<IsisProcess> = None;
     let mut isis_interfaces: BTreeMap<String, RawIsisInterface> = BTreeMap::new();
     let mut bgp_process: Option<BgpProcess> = None;
+    let mut segment_routing: Option<SegmentRoutingConfig> = None;
     let community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut static_routes: Vec<StaticRoute> = Vec::new();
     let mut static_routes_v6: Vec<Ipv6StaticRoute> = Vec::new();
@@ -225,7 +236,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
          bgp_process: &mut Option<BgpProcess>,
          prefix_lists: &mut Vec<PrefixList>,
          prefix_lists_v6: &mut Vec<PrefixListV6>,
-         policies: &mut Vec<PolicyDefinition>| {
+         policies: &mut Vec<PolicyDefinition>,
+         segment_routing: &mut Option<SegmentRoutingConfig>| {
             match ctx {
                 Context::Interface(iface) => {
                     interfaces.push(iface.clone());
@@ -299,6 +311,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     networks,
                     neighbors_v6,
                     networks_v6,
+                    evpn,
                     ..
                 } => {
                     let mut nbr_vec = Vec::new();
@@ -396,9 +409,28 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         networks: nets,
                         neighbors_v6: nbr_v6_vec,
                         networks_v6: nets_v6,
+                        evpn: evpn.clone(),
                     });
                 }
                 Context::Static { .. } => {}
+                Context::SegmentRouting {
+                    srv6,
+                    current_locator,
+                    ..
+                } => {
+                    let mut srv6_cfg = srv6.clone().unwrap_or_default();
+                    if let Some(loc) = current_locator.clone() {
+                        srv6_cfg.locators.push(loc);
+                    }
+                    if !srv6_cfg.locators.is_empty()
+                        || srv6_cfg.encapsulation_source_address.is_some()
+                    {
+                        *segment_routing = Some(SegmentRoutingConfig {
+                            srv6: Some(srv6_cfg),
+                            mpls: None,
+                        });
+                    }
+                }
                 Context::PrefixSet {
                     name,
                     entries,
@@ -487,6 +519,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
                             &mut policies,
+                            &mut segment_routing,
                         );
                     }
                 }
@@ -513,6 +546,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
                             &mut policies,
+                            &mut segment_routing,
                         );
                     }
                 }
@@ -535,6 +569,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
                             &mut policies,
+                            &mut segment_routing,
                         );
                     }
                 }
@@ -545,6 +580,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     current_peer_group,
                     in_af_ipv4,
                     in_af_ipv6,
+                    in_af_evpn,
                     ..
                 } => {
                     if current_peer_group.is_some() {
@@ -557,6 +593,8 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         *in_af_ipv4 = false;
                     } else if *in_af_ipv6 {
                         *in_af_ipv6 = false;
+                    } else if *in_af_evpn {
+                        *in_af_evpn = false;
                     } else {
                         flush_context(
                             &mut ctx,
@@ -571,6 +609,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
                             &mut policies,
+                            &mut segment_routing,
                         );
                     }
                 }
@@ -596,6 +635,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             &mut prefix_lists,
                             &mut prefix_lists_v6,
                             &mut policies,
+                            &mut segment_routing,
                         );
                     }
                 }
@@ -604,6 +644,16 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 }
                 Context::RoutePolicy(..) => {
                     // Do not flush on '!' inside route-policy; wait for end-policy
+                }
+                Context::SegmentRouting {
+                    current_locator,
+                    srv6,
+                    ..
+                } => {
+                    if let Some(loc) = current_locator.take() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.locators.push(loc);
+                    }
                 }
                 _ => {
                     flush_context(
@@ -619,6 +669,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         &mut prefix_lists,
                         &mut prefix_lists_v6,
                         &mut policies,
+                        &mut segment_routing,
                     );
                 }
             }
@@ -696,6 +747,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 &mut prefix_lists,
                 &mut prefix_lists_v6,
                 &mut policies,
+                &mut segment_routing,
             );
             continue;
         }
@@ -709,7 +761,9 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 || line.starts_with("router bgp ")
                 || line.starts_with("router static")
                 || line.starts_with("prefix-set ")
-                || line.starts_with("route-policy ");
+                || line.starts_with("route-policy ")
+                || line == "segment-routing"
+                || line.starts_with("segment-routing ");
 
             if is_top_command {
                 flush_context(
@@ -725,6 +779,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     &mut prefix_lists,
                     &mut prefix_lists_v6,
                     &mut policies,
+                    &mut segment_routing,
                 );
             }
         }
@@ -750,8 +805,11 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     let parsed: PResult<(&str, &str, &str)> =
                         seq!("interface", space1, rest).parse_next(&mut s);
                     if let Ok((_, _, iface_name)) = parsed {
+                        let name_str = iface_name.trim().to_string();
+                        let is_vxlan = name_str.to_lowercase().starts_with("nve")
+                            || name_str.to_lowercase().starts_with("vxlan");
                         ctx = Context::Interface(Interface {
-                            name: iface_name.trim().to_string(),
+                            name: name_str,
                             description: None,
                             enabled: true,
                             ipv4: None,
@@ -759,6 +817,11 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             ospf: None,
                             ospfv3: None,
                             isis: None,
+                            vxlan: if is_vxlan {
+                                Some(InterfaceVxlanConfig::default())
+                            } else {
+                                None
+                            },
                         });
                     } else {
                         unparsed_lines.push(UnparsedLine {
@@ -850,11 +913,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                                 current_peer_group: None,
                                 in_af_ipv4: false,
                                 in_af_ipv6: false,
+                                in_af_evpn: false,
                                 peer_groups: BTreeMap::new(),
                                 neighbors: BTreeMap::new(),
                                 networks: Vec::new(),
                                 neighbors_v6: BTreeMap::new(),
                                 networks_v6: Vec::new(),
+                                evpn: None,
                             };
                         } else {
                             unparsed_lines.push(UnparsedLine {
@@ -883,6 +948,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         name,
                         entries: Vec::new(),
                         entries_v6: Vec::new(),
+                    };
+                } else if line == "segment-routing" || line.starts_with("segment-routing ") {
+                    ctx = Context::SegmentRouting {
+                        srv6: None,
+                        in_srv6: false,
+                        in_locators: false,
+                        current_locator: None,
                     };
                 } else if let Some(stripped) = line.strip_prefix("route-policy ") {
                     let name = stripped.trim().to_string();
@@ -982,6 +1054,26 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                     iface.enabled = false;
                 } else if line == "no shutdown" {
                     iface.enabled = true;
+                } else if let Some(stripped) = line.strip_prefix("source-interface ") {
+                    let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                    cfg.source_interface = Some(stripped.trim().to_string());
+                } else if let Some(stripped) = line.strip_prefix("member vni ") {
+                    let parts: Vec<&str> = stripped.split_whitespace().collect();
+                    if let Some(vni_str) = parts.first().copied() {
+                        if let Ok(vni) = vni_str.parse::<u32>() {
+                            let mut vlan = None;
+                            if parts.len() >= 3 && parts[1] == "vlan" {
+                                vlan = parts[2].parse::<u16>().ok();
+                            }
+                            let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                            cfg.vni_bindings.push(VniVlanBinding { vni, vlan });
+                        }
+                    }
+                } else if let Some(stripped) = line.strip_prefix("vxlan udp-port ") {
+                    if let Ok(port) = stripped.trim().parse::<u16>() {
+                        let cfg = iface.vxlan.get_or_insert_with(Default::default);
+                        cfg.udp_port = Some(port);
+                    }
                 } else {
                     unparsed_lines.push(UnparsedLine {
                         file_path: filename.map(String::from),
@@ -1224,11 +1316,13 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 ref mut current_peer_group,
                 ref mut in_af_ipv4,
                 ref mut in_af_ipv6,
+                ref mut in_af_evpn,
                 ref mut peer_groups,
                 ref mut neighbors,
                 ref mut networks,
                 ref mut neighbors_v6,
                 ref mut networks_v6,
+                ref mut evpn,
                 ..
             } => {
                 if let Some(stripped) = line.strip_prefix("cluster-id ") {
@@ -1306,13 +1400,40 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 } else if line.starts_with("address-family ipv4 unicast") {
                     *in_af_ipv4 = true;
                     *in_af_ipv6 = false;
+                    *in_af_evpn = false;
                     *current_neighbor = None;
                     *current_neighbor_v6 = None;
                 } else if line.starts_with("address-family ipv6 unicast") {
                     *in_af_ipv6 = true;
                     *in_af_ipv4 = false;
+                    *in_af_evpn = false;
                     *current_neighbor = None;
                     *current_neighbor_v6 = None;
+                } else if line.starts_with("address-family l2vpn evpn")
+                    || line.starts_with("address-family evpn")
+                {
+                    *in_af_evpn = true;
+                    *in_af_ipv4 = false;
+                    *in_af_ipv6 = false;
+                    let cfg = evpn.get_or_insert_with(Default::default);
+                    cfg.enabled = true;
+                    if let Some(nbr) = current_neighbor {
+                        if !cfg.neighbors.iter().any(|n| n.peer == nbr.to_string()) {
+                            cfg.neighbors.push(BgpEvpnNeighbor {
+                                peer: nbr.to_string(),
+                                route_reflector_client: None,
+                                send_community: None,
+                            });
+                        }
+                    } else if let Some(nbr6) = current_neighbor_v6 {
+                        if !cfg.neighbors.iter().any(|n| n.peer == nbr6.to_string()) {
+                            cfg.neighbors.push(BgpEvpnNeighbor {
+                                peer: nbr6.to_string(),
+                                route_reflector_client: None,
+                                send_community: None,
+                            });
+                        }
+                    }
                 } else if let Some(stripped) = line.strip_prefix("neighbor ") {
                     let mut s = stripped.trim();
                     if let Ok(ip) = parse_ipv4.parse_next(&mut s) {
@@ -1478,6 +1599,70 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         content: line.to_string(),
                         reason: "unsupported router static command".to_string(),
                     });
+                }
+            }
+            Context::SegmentRouting {
+                ref mut srv6,
+                ref mut in_srv6,
+                ref mut in_locators,
+                ref mut current_locator,
+            } => {
+                if line == "srv6" {
+                    *in_srv6 = true;
+                    if srv6.is_none() {
+                        *srv6 = Some(SrV6Config {
+                            enabled: true,
+                            encapsulation_source_address: None,
+                            locators: Vec::new(),
+                        });
+                    }
+                } else if line == "locators" {
+                    *in_locators = true;
+                } else if let Some(stripped) = line.strip_prefix("source-address ") {
+                    if let Ok(ip6) = stripped.trim().parse::<Ipv6Addr>() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.encapsulation_source_address = Some(ip6);
+                    }
+                } else if let Some(stripped) = line.strip_prefix("locator ") {
+                    if let Some(prev) = current_locator.take() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.locators.push(prev);
+                    }
+                    let loc_name = stripped.trim().to_string();
+                    *current_locator = Some(SrV6Locator {
+                        name: loc_name,
+                        prefix: "::/0".parse().unwrap(),
+                        micro_segment: None,
+                    });
+                } else if let Some(stripped) = line.strip_prefix("prefix ") {
+                    let parts: Vec<&str> = stripped.split_whitespace().collect();
+                    if let Some(pfx_str) = parts.first().copied() {
+                        if let Ok(pfx) = pfx_str.parse::<Ipv6Prefix>() {
+                            if let Some(ref mut loc) = current_locator {
+                                loc.prefix = pfx;
+                                if parts.iter().any(|&p| p == "micro-segment" || p == "unode") {
+                                    loc.micro_segment = Some(SrV6UsidConfig {
+                                        enabled: true,
+                                        block_length: Some(16),
+                                        node_length: Some(16),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } else if line.starts_with("micro-segment ") {
+                    if let Some(ref mut loc) = current_locator {
+                        loc.micro_segment = Some(SrV6UsidConfig {
+                            enabled: true,
+                            block_length: Some(16),
+                            node_length: Some(16),
+                        });
+                    }
+                } else if line == "!" || line == "exit" {
+                    if let Some(prev) = current_locator.take() {
+                        let cfg = srv6.get_or_insert_with(Default::default);
+                        cfg.locators.push(prev);
+                    }
                 }
             }
             Context::PrefixSet {
@@ -1768,6 +1953,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         &mut prefix_lists,
         &mut prefix_lists_v6,
         &mut policies,
+        &mut segment_routing,
     );
 
     for iface in &mut interfaces {
@@ -1819,6 +2005,7 @@ pub fn parse_iosxr_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         ospfv3: ospfv3_process,
         isis: isis_process,
         bgp: bgp_process,
+        segment_routing,
         static_routes,
         static_routes_v6,
         prefix_lists,

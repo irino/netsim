@@ -20,6 +20,7 @@ fn test_zebra_golden() {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "eth2".to_string(),
@@ -30,6 +31,7 @@ fn test_zebra_golden() {
                 ospf: None,
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -39,6 +41,7 @@ fn test_zebra_golden() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),

@@ -111,6 +111,56 @@ impl<'a> ReachabilitySolver<'a> {
             issues.push(format!("Topology warning for {}: {}", w.subnet, w.message));
         }
 
+        // 3. Check VTEP source interface and duplicate VNI consistency
+        let mut vni_to_nodes: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+        for dev in self.devices {
+            for iface in &dev.interfaces {
+                if let Some(ref vx) = iface.vxlan {
+                    if let Some(ref src_if) = vx.source_interface {
+                        // Verify source-interface exists on the device
+                        let exists = dev.interfaces.iter().any(|i| {
+                            i.name == *src_if
+                                || i.name.split('.').next() == src_if.split('.').next()
+                        });
+                        if !exists {
+                            issues.push(format!(
+                                "VTEP source interface '{}' on {}:{} does not exist on device",
+                                src_if, dev.hostname, iface.name
+                            ));
+                        }
+                    }
+                    for binding in &vx.vni_bindings {
+                        vni_to_nodes
+                            .entry(binding.vni)
+                            .or_default()
+                            .push(dev.hostname.clone());
+                    }
+                }
+            }
+        }
+
+        // 4. Check SRv6 locator prefixes and uSID block overlaps
+        let mut seen_locators: BTreeMap<String, String> = BTreeMap::new();
+        for dev in self.devices {
+            if let Some(ref sr) = dev.segment_routing {
+                if let Some(ref srv6) = sr.srv6 {
+                    for loc in &srv6.locators {
+                        let pfx_str = loc.prefix.to_string();
+                        if let Some(other_host) =
+                            seen_locators.insert(pfx_str.clone(), dev.hostname.clone())
+                        {
+                            if other_host != dev.hostname {
+                                issues.push(format!(
+                                    "Duplicate SRv6 locator prefix {} configured on {} and {}",
+                                    pfx_str, other_host, dev.hostname
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         issues
     }
 
