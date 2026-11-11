@@ -348,3 +348,55 @@ set protocols bgp group RR_CLIENTS neighbor 10.0.0.2
     );
     assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:200"));
 }
+
+#[test]
+fn test_parse_junos_evpn_vxlan_and_srv6() {
+    let input = r#"
+set system host-name junos-leaf1
+set switch-options vtep-source-interface lo0.0
+set vlans v10 vlan-id 10 vxlan vni 10010
+set vlans v20 vlan-id 20 vxlan vni 10020
+set protocols evpn encapsulation vxlan
+set protocols evpn default-gateway advertise
+set routing-options autonomous-system 65001
+set protocols bgp group OVERLAY type internal
+set protocols bgp group OVERLAY family evpn signaling
+set protocols bgp group OVERLAY neighbor 10.0.0.100 peer-as 65001
+set routing-options segment-routing srv6 encapsulation source-address 2001:db8:1::1
+set routing-options segment-routing srv6 locator LOC1 prefix fc00:0:1::/48
+set routing-options segment-routing srv6 locator LOC1 micro-segment
+"#;
+
+    let config = parse_junos_config(input, Some("junos-leaf1.set"));
+    assert_eq!(config.hostname, "junos-leaf1");
+
+    let vtep = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "vtep0")
+        .expect("vtep0");
+    let vxlan = vtep.vxlan.as_ref().expect("vxlan");
+    assert_eq!(vxlan.source_interface.as_deref(), Some("lo0.0"));
+    assert_eq!(vxlan.vni_bindings.len(), 2);
+    assert_eq!(vxlan.vni_bindings[0].vni, 10010);
+    assert_eq!(vxlan.vni_bindings[0].vlan, Some(10));
+
+    let bgp = config.bgp.expect("bgp");
+    let evpn = bgp.evpn.expect("evpn");
+    assert!(evpn.enabled);
+    assert_eq!(evpn.advertise_all_vni, Some(true));
+    assert_eq!(evpn.advertise_default_gw, Some(true));
+    assert_eq!(evpn.neighbors.len(), 1);
+    assert_eq!(evpn.neighbors[0].peer, "10.0.0.100");
+
+    let sr = config.segment_routing.expect("sr");
+    let srv6 = sr.srv6.expect("srv6");
+    assert_eq!(
+        srv6.encapsulation_source_address,
+        Some("2001:db8:1::1".parse().unwrap())
+    );
+    assert_eq!(srv6.locators.len(), 1);
+    assert_eq!(srv6.locators[0].name, "LOC1");
+    assert_eq!(srv6.locators[0].prefix, "fc00:0:1::/48".parse().unwrap());
+    assert!(srv6.locators[0].micro_segment.as_ref().unwrap().enabled);
+}

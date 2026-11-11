@@ -11,11 +11,13 @@ struct JunosTerm {
 }
 
 use ir::{
-    BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess, CommunityList, CommunityListEntry,
-    DeviceConfig, Interface, InterfaceIsisConfig, InterfaceOspfConfig, Ipv4Prefix, Ipv6Prefix,
-    Ipv6StaticRoute, IsisLevel, IsisProcess, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction,
-    PolicyActions, PolicyConditions, PolicyDefinition, PolicyStatement, PrefixList,
-    PrefixListEntry, PrefixListEntryV6, PrefixListV6, StaticRoute, UnparsedLine,
+    BgpEvpnConfig, BgpEvpnNeighbor, BgpNeighbor, BgpNeighborV6, BgpPeerGroup, BgpProcess,
+    CommunityList, CommunityListEntry, DeviceConfig, Interface, InterfaceIsisConfig,
+    InterfaceOspfConfig, InterfaceVxlanConfig, Ipv4Prefix, Ipv6Prefix, Ipv6StaticRoute, IsisLevel,
+    IsisProcess, Ospf6Process, OspfAreaId, OspfProcess, PolicyAction, PolicyActions,
+    PolicyConditions, PolicyDefinition, PolicyStatement, PrefixList, PrefixListEntry,
+    PrefixListEntryV6, PrefixListV6, SegmentRoutingConfig, SrV6Locator, SrV6UsidConfig,
+    StaticRoute, UnparsedLine, VniVlanBinding,
 };
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -103,6 +105,7 @@ struct RawInterface {
     disable: bool,
     ipv4: Option<Ipv4Prefix>,
     ipv6: Option<Ipv6Prefix>,
+    vxlan: Option<InterfaceVxlanConfig>,
 }
 
 #[derive(Default, Debug)]
@@ -143,6 +146,10 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
     let mut community_lists_map: BTreeMap<String, Vec<CommunityListEntry>> = BTreeMap::new();
     let mut bgp_networks: Vec<Ipv4Prefix> = Vec::new();
     let mut bgp_networks_v6: Vec<Ipv6Prefix> = Vec::new();
+    let mut bgp_evpn_config: Option<BgpEvpnConfig> = None;
+    let mut segment_routing: Option<SegmentRoutingConfig> = None;
+    let mut vtep_source_interface: Option<String> = None;
+    let mut vni_bindings: Vec<VniVlanBinding> = Vec::new();
     let mut has_bgp = false;
 
     let mut static_routes = Vec::new();
@@ -181,6 +188,48 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         }
 
         let cmd = line["set ".len()..].trim();
+
+        // Switch options & VLANs for EVPN / VXLAN
+        if let Some(stripped) = cmd.strip_prefix("switch-options ") {
+            let tokens: Vec<&str> = stripped.split_whitespace().collect();
+            if tokens.len() >= 2 && tokens[0] == "vtep-source-interface" {
+                vtep_source_interface = Some(tokens[1].to_string());
+            }
+            continue;
+        }
+
+        if let Some(stripped) = cmd.strip_prefix("vlans ") {
+            let tokens: Vec<&str> = stripped.split_whitespace().collect();
+            if let Some(vni_idx) = tokens.iter().position(|&t| t == "vni") {
+                if vni_idx + 1 < tokens.len() {
+                    if let Ok(vni) = tokens[vni_idx + 1].parse::<u32>() {
+                        let mut vlan = None;
+                        if let Some(vlan_idx) = tokens.iter().position(|&t| t == "vlan-id") {
+                            if vlan_idx + 1 < tokens.len() {
+                                vlan = tokens[vlan_idx + 1].parse::<u16>().ok();
+                            }
+                        }
+                        vni_bindings.push(VniVlanBinding { vni, vlan });
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let Some(stripped) = cmd.strip_prefix("protocols evpn ") {
+            let tokens: Vec<&str> = stripped.split_whitespace().collect();
+            let cfg = bgp_evpn_config.get_or_insert_with(Default::default);
+            cfg.enabled = true;
+            if tokens.len() >= 2 && tokens[0] == "encapsulation" && tokens[1] == "vxlan" {
+                cfg.advertise_all_vni = Some(true);
+            } else if tokens.len() >= 2
+                && tokens[0] == "default-gateway"
+                && tokens[1] == "advertise"
+            {
+                cfg.advertise_default_gw = Some(true);
+            }
+            continue;
+        }
 
         // 1. Hostname: set system host-name <name>
         if cmd.starts_with("system host-name ") {
@@ -234,6 +283,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                             disable: false,
                             ipv4: None,
                             ipv6: None,
+                            vxlan: None,
                         });
 
                 let sub_tokens = &tokens[3..];
@@ -324,6 +374,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         disable: false,
                         ipv4: None,
                         ipv6: None,
+                        vxlan: None,
                     });
                 entry.description = Some(desc.trim_matches('"').to_string());
             } else if tokens.len() == 2 && tokens[1] == "disable" {
@@ -335,6 +386,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                         disable: false,
                         ipv4: None,
                         ipv6: None,
+                        vxlan: None,
                     });
                 entry.disable = true;
             } else {
@@ -354,6 +406,58 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         // set routing-options static route <dest/len> next-hop <ip>
         if let Some(stripped) = cmd.strip_prefix("routing-options ") {
             let rest_ro = stripped.trim();
+
+            if let Some(stripped_sr) = rest_ro.strip_prefix("segment-routing srv6 ") {
+                let sr_cfg = segment_routing.get_or_insert_with(Default::default);
+                let srv6_cfg = sr_cfg.srv6.get_or_insert_with(Default::default);
+                srv6_cfg.enabled = true;
+                let tokens: Vec<&str> = stripped_sr.split_whitespace().collect();
+                if tokens.len() >= 3
+                    && tokens[0] == "encapsulation"
+                    && tokens[1] == "source-address"
+                {
+                    if let Ok(ip6) = tokens[2].parse::<Ipv6Addr>() {
+                        srv6_cfg.encapsulation_source_address = Some(ip6);
+                    }
+                } else if tokens.len() >= 4 && tokens[0] == "locator" && tokens[2] == "prefix" {
+                    let loc_name = tokens[1].to_string();
+                    if let Ok(pfx) = tokens[3].parse::<Ipv6Prefix>() {
+                        if let Some(loc) = srv6_cfg.locators.iter_mut().find(|l| l.name == loc_name)
+                        {
+                            loc.prefix = pfx;
+                        } else {
+                            srv6_cfg.locators.push(SrV6Locator {
+                                name: loc_name,
+                                prefix: pfx,
+                                micro_segment: None,
+                            });
+                        }
+                    }
+                } else if tokens.len() >= 3
+                    && tokens[0] == "locator"
+                    && tokens[2].starts_with("micro-segment")
+                {
+                    let loc_name = tokens[1].to_string();
+                    if let Some(loc) = srv6_cfg.locators.iter_mut().find(|l| l.name == loc_name) {
+                        loc.micro_segment = Some(SrV6UsidConfig {
+                            enabled: true,
+                            block_length: Some(16),
+                            node_length: Some(16),
+                        });
+                    } else {
+                        srv6_cfg.locators.push(SrV6Locator {
+                            name: loc_name,
+                            prefix: "::/0".parse().unwrap(),
+                            micro_segment: Some(SrV6UsidConfig {
+                                enabled: true,
+                                block_length: Some(16),
+                                node_length: Some(16),
+                            }),
+                        });
+                    }
+                }
+                continue;
+            }
 
             if let Some(stripped_id) = rest_ro.strip_prefix("router-id ") {
                 let mut s = stripped_id.trim();
@@ -1050,6 +1154,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
                 disable: false,
                 ipv4: None,
                 ipv6: None,
+                vxlan: None,
             });
     }
     let all_keys: Vec<String> = interfaces_map.keys().cloned().collect();
@@ -1132,7 +1237,29 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             ospf: iface_ospf,
             ospfv3: iface_ospfv3,
             isis: iface_isis,
+            vxlan: raw_iface.vxlan,
         });
+    }
+
+    if vtep_source_interface.is_some() || !vni_bindings.is_empty() {
+        let vtep_iface = Interface {
+            name: "vtep0".to_string(),
+            description: Some("Junos EVPN/VXLAN VTEP".to_string()),
+            enabled: true,
+            ipv4: None,
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: Some(InterfaceVxlanConfig {
+                source_interface: vtep_source_interface,
+                local_ip: None,
+                udp_port: Some(4789),
+                vni_bindings,
+                default_vni: None,
+            }),
+        };
+        interfaces.push(vtep_iface);
     }
 
     // Sort interfaces deterministically by name
@@ -1252,6 +1379,36 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         bgp_networks_v6.sort();
         bgp_networks_v6.dedup();
 
+        let mut evpn = bgp_evpn_config;
+        if let Some(ref mut evpn_cfg) = evpn {
+            for nbr in &neighbors {
+                if !evpn_cfg
+                    .neighbors
+                    .iter()
+                    .any(|n| n.peer == nbr.remote_address.to_string())
+                {
+                    evpn_cfg.neighbors.push(BgpEvpnNeighbor {
+                        peer: nbr.remote_address.to_string(),
+                        route_reflector_client: nbr.route_reflector_client,
+                        send_community: nbr.send_community.clone(),
+                    });
+                }
+            }
+            for nbr_v6 in &neighbors_v6 {
+                if !evpn_cfg
+                    .neighbors
+                    .iter()
+                    .any(|n| n.peer == nbr_v6.remote_address.to_string())
+                {
+                    evpn_cfg.neighbors.push(BgpEvpnNeighbor {
+                        peer: nbr_v6.remote_address.to_string(),
+                        route_reflector_client: nbr_v6.route_reflector_client,
+                        send_community: nbr_v6.send_community.clone(),
+                    });
+                }
+            }
+        }
+
         Some(BgpProcess {
             as_number: bgp_as.unwrap_or(0),
             router_id: bgp_router_id,
@@ -1261,6 +1418,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
             networks: bgp_networks,
             neighbors_v6,
             networks_v6: bgp_networks_v6,
+            evpn,
         })
     } else {
         None
@@ -1321,6 +1479,7 @@ pub fn parse_junos_config(input: &str, filename: Option<&str>) -> DeviceConfig {
         ospfv3,
         isis: isis_process,
         bgp,
+        segment_routing,
         static_routes,
         static_routes_v6,
         prefix_lists,

@@ -387,6 +387,31 @@ pub struct InterfaceOspfConfig {
     pub bfd: Option<bool>,
 }
 
+/// Mapping between a VLAN and a VXLAN Network Identifier (VNI).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct VniVlanBinding {
+    pub vni: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+}
+
+/// VXLAN / NVE / VTEP interface configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct InterfaceVxlanConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_interface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_ip: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vni_bindings: Vec<VniVlanBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_vni: Option<u32>,
+}
+
 /// Network interface configuration aligned with ietf-interfaces.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -406,6 +431,8 @@ pub struct Interface {
     pub ospfv3: Option<InterfaceOspfConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isis: Option<InterfaceIsisConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vxlan: Option<InterfaceVxlanConfig>,
 }
 
 impl Interface {
@@ -511,6 +538,83 @@ pub struct BgpNeighborV6 {
     pub bfd: Option<bool>,
 }
 
+/// BGP EVPN neighbor activation and parameters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpEvpnNeighbor {
+    pub peer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_reflector_client: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_community: Option<String>,
+}
+
+/// BGP EVPN (AFI 25 / SAFI 70) address family configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct BgpEvpnConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advertise_all_vni: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advertise_default_gw: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbors: Vec<BgpEvpnNeighbor>,
+}
+
+/// SRv6 micro-segment (uSID) behavior configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SrV6UsidConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_length: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_length: Option<u8>,
+}
+
+/// SRv6 locator configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SrV6Locator {
+    pub name: String,
+    pub prefix: Ipv6Prefix,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub micro_segment: Option<SrV6UsidConfig>,
+}
+
+/// SRv6 configuration container aligned with zebra-rs / ietf-segment-routing.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SrV6Config {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encapsulation_source_address: Option<Ipv6Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locators: Vec<SrV6Locator>,
+}
+
+/// SR-MPLS configuration container.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SrMplsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Top-level Segment Routing configuration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SegmentRoutingConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srv6: Option<SrV6Config>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpls: Option<SrMplsConfig>,
+}
+
 /// BGP process configuration aligned with ietf-routing / ietf-bgp.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -530,6 +634,8 @@ pub struct BgpProcess {
     pub neighbors_v6: Vec<BgpNeighborV6>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub networks_v6: Vec<Ipv6Prefix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evpn: Option<BgpEvpnConfig>,
 }
 
 /// Action for a routing policy or prefix-list entry.
@@ -876,6 +982,8 @@ pub struct DeviceConfig {
     pub isis: Option<IsisProcess>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bgp: Option<BgpProcess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_routing: Option<SegmentRoutingConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub static_routes: Vec<StaticRoute>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

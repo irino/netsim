@@ -240,8 +240,17 @@ netsim gen-lab  --configs ./configs/ --out ./lab/   # zebra.yaml群 + clab.yml +
   - `netsim check` サブコマンドを追加し、Containerlab デプロイ前の事前静的チェックおよび Batfish ベンダー非依存 JSON 出力に対応。
   - `netsim verify --static-only` による高速静的検証に対応。
 
-### Phase 5: オーバーレイネットワークと最新ファブリック（EVPN / SRv6）
+### Phase 5: オーバーレイネットワークと最新ファブリック（EVPN / SRv6）（実装完了）
+オーバーレイネットワークおよび最新のプログラマブルファブリック設定を網羅的にモデリング・変換：
+
 - **VXLAN / EVPN L2/L3 ファブリック**:
-  - VTEP / NVE インターフェースおよび BGP EVPN (AFI 25 / SAFI 70) のパースとモデリング。
+  - `crates/ir` において `InterfaceVxlanConfig`, `VniVlanBinding`, `BgpEvpnConfig` (`BgpEvpnNeighbor`, `advertise-all-vni`, `advertise-default-gw`) を策定。
+  - 5ベンダー（Cisco IOS, Cisco IOS XR, Arista EOS, FRR, Junos set形式）の VTEP / NVE インターフェースおよび BGP EVPN (AFI 25 / SAFI 70) のパースに対応。
 - **Segment Routing (SRv6 / SR-MPLS)**:
-  - zebra-rs の主要な強みである SRv6 micro-segment (uSID) およびプログラマブルデータプレーンとの連携。
+  - `ietf-segment-routing` (RFC 9020) に準拠した `SegmentRoutingConfig`, `SrV6Config`, `SrV6Locator`, `SrV6UsidConfig` をモデリング。
+  - zebra-rs の強みである SRv6 micro-segment (uSID behavior unode) およびカプセル化送信元アドレスのパース・出力に対応。
+- **マルチエンジン出力と静的検証**:
+  - `crates/emit-zebra`: `interface.vxlan`, `router.bgp.evpn`, `segment-routing.srv6` を宣言的 YAML へ出力。
+  - `crates/emit-frr`: `interface vxlan`, `address-family l2vpn evpn`, `segment-routing srv6` を `frr.conf` へ出力。
+  - `crates/reachability`: VTEP 送信元インターフェースの存在確認および SRv6 ロケータプレフィックスの重複検証を静的に実施。
+  - `crates/validate-yang`: `ietf-segment-routing` (RFC 9020) スキーマ検証に対応。

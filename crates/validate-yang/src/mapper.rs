@@ -460,6 +460,25 @@ pub fn map_device_config_to_yang_json(config: &DeviceConfig) -> YangInstanceDocu
         "hostname: Router hostname is represented in ietf-system (RFC 7317), not ietf-interfaces or ietf-routing"
             .to_string(),
     );
+
+    if let Some(ref bgp) = config.bgp {
+        if let Some(ref evpn) = bgp.evpn {
+            uncovered_fields.push(format!(
+                "bgp.evpn: BGP EVPN address family (AFI 25 / SAFI 70) with {} neighbor(s) is modeled under ietf-bgp-common-multiprotocol placeholder",
+                evpn.neighbors.len()
+            ));
+        }
+    }
+
+    if let Some(ref sr) = config.segment_routing {
+        if let Some(ref srv6) = sr.srv6 {
+            uncovered_fields.push(format!(
+                "segment_routing.srv6: SRv6 locator configuration with {} locator(s) augments RFC 9020 via SRv6 YANG extensions",
+                srv6.locators.len()
+            ));
+        }
+    }
+
     if !config.unparsed_lines.is_empty() {
         uncovered_fields.push(format!(
             "unparsed_lines: Meta-diagnostic unparsed syntax lines ({} line(s)) have no IETF YANG representation",

@@ -23,6 +23,7 @@ fn make_basic_device() -> DeviceConfig {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "enp0s7".to_string(),
@@ -38,6 +39,7 @@ fn make_basic_device() -> DeviceConfig {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -47,6 +49,7 @@ fn make_basic_device() -> DeviceConfig {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -66,6 +69,7 @@ fn test_hostname_generation() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -113,6 +117,7 @@ fn test_static_routes_emission() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: vec![
             StaticRoute {
                 destination: "0.0.0.0/0".parse().unwrap(),
@@ -165,7 +170,9 @@ fn test_bgp_emission() {
             networks: vec!["192.168.1.0/24".parse().unwrap()],
             neighbors_v6: Vec::new(),
             networks_v6: Vec::new(),
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -218,6 +225,7 @@ fn test_emit_warnings_for_unsupported_features() {
             ospf: None,
             ospfv3: None,
             isis: None,
+            vxlan: None,
         }],
         ospf: Some(OspfProcess {
             process_id: 10,
@@ -226,6 +234,7 @@ fn test_emit_warnings_for_unsupported_features() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -262,6 +271,7 @@ fn test_prefix_lists_and_policy_emission() {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: vec![ir::PrefixList {
@@ -339,6 +349,7 @@ fn test_ipv6_emission() {
                 bfd: None,
             }),
             isis: None,
+            vxlan: None,
         }],
         ospf: None,
         ospfv3: Some(Ospf6Process {
@@ -363,7 +374,9 @@ fn test_ipv6_emission() {
                 bfd: None,
             }],
             networks_v6: vec!["2001:db8:2::/64".parse().unwrap()],
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: vec![Ipv6StaticRoute {
             destination: "2001:db8:100::/48".parse().unwrap(),
@@ -406,6 +419,7 @@ fn test_isis_and_advanced_bgp_emission() {
                     passive: None,
                     bfd: Some(true),
                 }),
+                vxlan: None,
             },
             Interface {
                 name: "lo".to_string(),
@@ -421,6 +435,7 @@ fn test_isis_and_advanced_bgp_emission() {
                     passive: Some(true),
                     bfd: None,
                 }),
+                vxlan: None,
             },
         ],
         ospf: None,
@@ -454,7 +469,9 @@ fn test_isis_and_advanced_bgp_emission() {
             networks: vec![],
             neighbors_v6: vec![],
             networks_v6: vec![],
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: vec![],
         static_routes_v6: vec![],
         prefix_lists: vec![],
@@ -513,4 +530,87 @@ fn test_isis_and_advanced_bgp_emission() {
     assert!(result.yaml.contains("65000:100"));
     assert!(result.yaml.contains("community: COMM_TEST"));
     assert!(result.yaml.contains("community: 65000:200"));
+}
+
+#[test]
+fn test_evpn_vxlan_and_srv6_emission() {
+    let dev = DeviceConfig {
+        hostname: "zebra-fabric".to_string(),
+        interfaces: vec![Interface {
+            name: "vxlan1".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: None,
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: Some(ir::InterfaceVxlanConfig {
+                source_interface: Some("Loopback0".to_string()),
+                local_ip: Some("10.0.0.1".parse().unwrap()),
+                udp_port: Some(4789),
+                vni_bindings: vec![ir::VniVlanBinding {
+                    vni: 10010,
+                    vlan: Some(10),
+                }],
+                default_vni: None,
+            }),
+        }],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: Some(BgpProcess {
+            as_number: 65001,
+            router_id: Some("10.0.0.1".parse().unwrap()),
+            cluster_id: None,
+            peer_groups: vec![],
+            neighbors: vec![],
+            networks: vec![],
+            neighbors_v6: vec![],
+            networks_v6: vec![],
+            evpn: Some(ir::BgpEvpnConfig {
+                enabled: true,
+                advertise_all_vni: Some(true),
+                advertise_default_gw: Some(true),
+                neighbors: vec![ir::BgpEvpnNeighbor {
+                    peer: "10.0.0.100".to_string(),
+                    route_reflector_client: Some(true),
+                    send_community: Some("extended".to_string()),
+                }],
+            }),
+        }),
+        segment_routing: Some(ir::SegmentRoutingConfig {
+            srv6: Some(ir::SrV6Config {
+                enabled: true,
+                encapsulation_source_address: Some("2001:db8:1::1".parse().unwrap()),
+                locators: vec![ir::SrV6Locator {
+                    name: "LOC1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: Some(ir::SrV6UsidConfig {
+                        enabled: true,
+                        block_length: Some(16),
+                        node_length: Some(16),
+                    }),
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let yaml = emit_zebra_yaml(&dev).expect("emit yaml");
+    assert!(yaml.contains("name: vxlan1"));
+    assert!(yaml.contains("vni: 10010"));
+    assert!(yaml.contains("udp-port: 4789"));
+    assert!(yaml.contains("advertise-all-vni: true"));
+    assert!(yaml.contains("segment-routing:"));
+    assert!(yaml.contains("srv6:"));
+    assert!(yaml.contains("prefix: fc00:0:1::/48"));
+    assert!(yaml.contains("block-length: 16"));
 }

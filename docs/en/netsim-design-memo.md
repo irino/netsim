@@ -226,8 +226,19 @@ Routing policies and prefix lists (both IPv4 and IPv6) are supported across the 
   - Integrated `netsim check` subcommand for rapid pre-flight validation and Batfish vendor-independent JSON format export.
   - Integrated static assertion evaluation and `netsim verify --static-only` mode.
 
-### Phase 5: Overlay Networking & Modern Fabrics (EVPN / SRv6)
+### Phase 5: Overlay Networking & Modern Fabrics (EVPN / SRv6) (Implemented)
+Overlay networking and modern programmable fabric configurations are fully modeled and translated:
+
 - **VXLAN / EVPN L2/L3 Fabrics**:
-  - Parsing and modeling VTEP / NVE interfaces and BGP EVPN (AFI 25 / SAFI 70).
-- **Segment Routing (SRv6 / SR-MPLS)**:
-  - Aligning with zebra-rs's core strengths in SRv6 micro-segments (uSID) and programmable data planes.
+  - Modeled `InterfaceVxlanConfig`, `VniVlanBinding`, and `BgpEvpnConfig` (`BgpEvpnNeighbor`, `advertise-all-vni`, `advertise-default-gw`) in `crates/ir`.
+  - Parsed across all 5 vendors (Cisco IOS, Cisco IOS XR, Arista EOS, FRR, Junos set format):
+    - VTEP / NVE interfaces with VNI-VLAN bindings, source-interface, local-tunnel IP, and UDP ports.
+    - BGP EVPN address family (AFI 25 / SAFI 70) with neighbor activation, route reflector clients, and community signaling.
+- **Segment Routing (SRv6 & SR-MPLS)**:
+  - Modeled `SegmentRoutingConfig`, `SrV6Config`, `SrV6Locator`, and `SrV6UsidConfig` aligned with `ietf-segment-routing` (RFC 9020).
+  - Modeled and emitted SRv6 micro-segments (uSID behavior unode with 16-bit block and node lengths) and encapsulation source IPv6 addresses.
+- **Multi-Engine Emitters & Verification**:
+  - `crates/emit-zebra`: Emits `interface -> vxlan`, `router -> bgp -> evpn`, and `segment-routing -> srv6` YAML structures.
+  - `crates/emit-frr`: Emits `interface vxlan`, `router bgp -> address-family l2vpn evpn`, and `segment-routing -> srv6` in `frr.conf`.
+  - `crates/reachability`: Static verification checks for VTEP source interface existence and SRv6 locator prefix uniqueness.
+  - `crates/validate-yang`: Validates IR mappings against pinned `ietf-segment-routing` (RFC 9020).

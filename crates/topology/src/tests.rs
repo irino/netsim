@@ -9,6 +9,7 @@ fn make_device(hostname: &str, interfaces: Vec<Interface>) -> DeviceConfig {
         bgp: None,
         ospfv3: None,
         isis: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -29,6 +30,7 @@ fn make_iface(name: &str, ip: Option<&str>, enabled: bool) -> Interface {
         ospf: None,
         ospfv3: None,
         isis: None,
+        vxlan: None,
     }
 }
 
@@ -302,6 +304,7 @@ fn make_iface_v6(name: &str, ip6: Option<&str>, enabled: bool) -> Interface {
         ospf: None,
         ospfv3: None,
         isis: None,
+        vxlan: None,
     }
 }
 

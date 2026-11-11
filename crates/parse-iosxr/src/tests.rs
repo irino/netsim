@@ -328,3 +328,72 @@ router bgp 65000
     assert_eq!(stmt.conditions.match_community.as_deref(), Some("COMM_SET"));
     assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:700"));
 }
+
+#[test]
+fn test_parse_iosxr_evpn_vxlan_and_srv6() {
+    let input = r#"
+hostname xr-leaf1
+!
+interface Loopback0
+ ipv4 address 10.0.0.1 255.255.255.255
+!
+interface nve1
+ source-interface Loopback0
+ member vni 10010 vlan 10
+ member vni 10020 vlan 20
+ vxlan udp-port 4789
+!
+router bgp 65001
+ bgp router-id 10.0.0.1
+ neighbor 10.0.0.100
+  remote-as 65001
+  address-family l2vpn evpn
+  !
+ !
+!
+segment-routing
+ srv6
+  encapsulation
+   source-address 2001:db8:1::1
+  !
+  locators
+   locator LOC1
+    micro-segment behavior unode
+    prefix fc00:0:1::/48
+   !
+  !
+ !
+!
+"#;
+
+    let config = parse_iosxr_config(input, Some("xr-leaf1.cfg"));
+    assert_eq!(config.hostname, "xr-leaf1");
+
+    let nve = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "nve1")
+        .expect("nve1");
+    let vxlan = nve.vxlan.as_ref().expect("vxlan");
+    assert_eq!(vxlan.source_interface.as_deref(), Some("Loopback0"));
+    assert_eq!(vxlan.vni_bindings.len(), 2);
+    assert_eq!(vxlan.vni_bindings[0].vni, 10010);
+    assert_eq!(vxlan.vni_bindings[0].vlan, Some(10));
+
+    let bgp = config.bgp.expect("bgp");
+    let evpn = bgp.evpn.expect("evpn");
+    assert!(evpn.enabled);
+    assert_eq!(evpn.neighbors.len(), 1);
+    assert_eq!(evpn.neighbors[0].peer, "10.0.0.100");
+
+    let sr = config.segment_routing.expect("sr");
+    let srv6 = sr.srv6.expect("srv6");
+    assert_eq!(
+        srv6.encapsulation_source_address,
+        Some("2001:db8:1::1".parse().unwrap())
+    );
+    assert_eq!(srv6.locators.len(), 1);
+    assert_eq!(srv6.locators[0].name, "LOC1");
+    assert_eq!(srv6.locators[0].prefix, "fc00:0:1::/48".parse().unwrap());
+    assert!(srv6.locators[0].micro_segment.as_ref().unwrap().enabled);
+}

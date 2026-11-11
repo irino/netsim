@@ -22,6 +22,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "eth2".to_string(),
@@ -37,6 +38,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "Loopback0".to_string(),
@@ -52,6 +54,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -61,6 +64,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -87,6 +91,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "eth2".to_string(),
@@ -102,6 +107,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "Loopback0".to_string(),
@@ -117,6 +123,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -126,6 +133,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -152,6 +160,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "eth2".to_string(),
@@ -167,6 +176,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "Loopback0".to_string(),
@@ -182,6 +192,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
                 }),
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: Some(OspfProcess {
@@ -191,6 +202,7 @@ fn create_3node_triangle_network() -> (Vec<DeviceConfig>, topology::Topology) {
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: Vec::new(),
         static_routes_v6: Vec::new(),
         prefix_lists: Vec::new(),
@@ -254,4 +266,93 @@ fn test_batfish_exporter() {
     let json = serde_json::to_string_pretty(&bf).unwrap();
     assert!(json.contains("\"hostname\": \"R1\""));
     assert!(json.contains("\"node1\": \"R1\""));
+}
+
+#[test]
+fn test_vtep_and_srv6_consistency_checks() {
+    let r1 = DeviceConfig {
+        hostname: "leaf1".to_string(),
+        interfaces: vec![Interface {
+            name: "vxlan1".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: None,
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: Some(ir::InterfaceVxlanConfig {
+                source_interface: Some("Loopback99".to_string()),
+                local_ip: None,
+                udp_port: Some(4789),
+                vni_bindings: vec![ir::VniVlanBinding {
+                    vni: 10010,
+                    vlan: Some(10),
+                }],
+                default_vni: None,
+            }),
+        }],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: None,
+        segment_routing: Some(ir::SegmentRoutingConfig {
+            srv6: Some(ir::SrV6Config {
+                enabled: true,
+                encapsulation_source_address: None,
+                locators: vec![ir::SrV6Locator {
+                    name: "LOC1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: None,
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let r2 = DeviceConfig {
+        hostname: "leaf2".to_string(),
+        interfaces: vec![],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: None,
+        segment_routing: Some(ir::SegmentRoutingConfig {
+            srv6: Some(ir::SrV6Config {
+                enabled: true,
+                encapsulation_source_address: None,
+                locators: vec![ir::SrV6Locator {
+                    name: "LOC1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: None,
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let topo = topology::infer_topology(&[r1.clone(), r2.clone()]);
+    let devices = vec![r1, r2];
+    let solver = ReachabilitySolver::new(&devices, &topo);
+    let issues = solver.check_consistency();
+    assert!(issues
+        .iter()
+        .any(|i| i.contains("VTEP source interface 'Loopback99'")));
+    assert!(issues
+        .iter()
+        .any(|i| i.contains("Duplicate SRv6 locator prefix fc00:0:1::/48")));
 }

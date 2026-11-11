@@ -289,3 +289,64 @@ router bgp 65000
         Some("65000:300")
     );
 }
+
+#[test]
+fn test_parse_frr_evpn_vxlan_and_srv6() {
+    let input = r#"
+hostname frr-leaf1
+!
+interface vxlan1
+   vxlan id 10010
+   vxlan local-tunnelip 10.0.0.1
+!
+router bgp 65001
+   bgp router-id 10.0.0.1
+   neighbor 10.0.0.100 remote-as 65001
+   address-family l2vpn evpn
+      neighbor 10.0.0.100 activate
+      neighbor 10.0.0.100 route-reflector-client
+      advertise-all-vni
+   exit-address-family
+!
+segment-routing
+   srv6
+      encapsulation
+         source-address 2001:db8:1::1
+      locators
+         locator LOC1
+            prefix fc00:0:1::/48
+            micro-segment behavior unode
+!
+"#;
+
+    let config = parse_frr_config(input, Some("frr-leaf1.cfg"));
+    assert_eq!(config.hostname, "frr-leaf1");
+
+    let vx = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "vxlan1")
+        .expect("vxlan1");
+    let vxlan = vx.vxlan.as_ref().expect("vxlan");
+    assert_eq!(vxlan.default_vni, Some(10010));
+    assert_eq!(vxlan.local_ip, Some("10.0.0.1".parse().unwrap()));
+
+    let bgp = config.bgp.expect("bgp");
+    let evpn = bgp.evpn.expect("evpn");
+    assert!(evpn.enabled);
+    assert_eq!(evpn.advertise_all_vni, Some(true));
+    assert_eq!(evpn.neighbors.len(), 1);
+    assert_eq!(evpn.neighbors[0].peer, "10.0.0.100");
+    assert_eq!(evpn.neighbors[0].route_reflector_client, Some(true));
+
+    let sr = config.segment_routing.expect("sr");
+    let srv6 = sr.srv6.expect("srv6");
+    assert_eq!(
+        srv6.encapsulation_source_address,
+        Some("2001:db8:1::1".parse().unwrap())
+    );
+    assert_eq!(srv6.locators.len(), 1);
+    assert_eq!(srv6.locators[0].name, "LOC1");
+    assert_eq!(srv6.locators[0].prefix, "fc00:0:1::/48".parse().unwrap());
+    assert!(srv6.locators[0].micro_segment.as_ref().unwrap().enabled);
+}

@@ -648,3 +648,88 @@ router bgp 65000
     );
     assert_eq!(stmt.actions.set_community.as_deref(), Some("65000:200"));
 }
+
+#[test]
+fn test_parse_ios_evpn_vxlan_and_srv6() {
+    let input = r#"
+hostname r1-fabric
+!
+interface Loopback0
+ ip address 10.0.0.1 255.255.255.255
+!
+interface nve1
+ no shutdown
+ source-interface Loopback0
+ member vni 10010 vlan 10
+ member vni 10020 vlan 20
+ vxlan udp-port 4789
+!
+router bgp 65001
+ bgp router-id 10.0.0.1
+ neighbor 10.0.0.100 remote-as 65001
+ address-family l2vpn evpn
+  neighbor 10.0.0.100 activate
+  neighbor 10.0.0.100 route-reflector-client
+  neighbor 10.0.0.100 send-community extended
+  advertise-all-vni
+ exit-address-family
+!
+segment-routing
+ srv6
+  encapsulation
+   source-address 2001:db8:1::1
+  locators
+   locator LOC1
+    prefix fc00:0:1::/48 micro-segment behavior unode
+   !
+  !
+ !
+!
+"#;
+
+    let config = parse_ios_config(input, Some("r1-fabric.cfg"));
+    assert_eq!(config.hostname, "r1-fabric");
+
+    // VXLAN
+    let nve = config
+        .interfaces
+        .iter()
+        .find(|i| i.name == "nve1")
+        .expect("nve1 interface");
+    assert!(nve.enabled);
+    let vxlan = nve.vxlan.as_ref().expect("vxlan config");
+    assert_eq!(vxlan.source_interface.as_deref(), Some("Loopback0"));
+    assert_eq!(vxlan.udp_port, Some(4789));
+    assert_eq!(vxlan.vni_bindings.len(), 2);
+    assert_eq!(vxlan.vni_bindings[0].vni, 10010);
+    assert_eq!(vxlan.vni_bindings[0].vlan, Some(10));
+
+    // BGP EVPN
+    let bgp = config.bgp.expect("bgp config");
+    let evpn = bgp.evpn.expect("evpn config");
+    assert!(evpn.enabled);
+    assert_eq!(evpn.advertise_all_vni, Some(true));
+    assert_eq!(evpn.neighbors.len(), 1);
+    assert_eq!(evpn.neighbors[0].peer, "10.0.0.100");
+    assert_eq!(evpn.neighbors[0].route_reflector_client, Some(true));
+    assert_eq!(
+        evpn.neighbors[0].send_community.as_deref(),
+        Some("extended")
+    );
+
+    // SRv6
+    let sr = config.segment_routing.expect("segment-routing");
+    let srv6 = sr.srv6.expect("srv6 config");
+    assert_eq!(
+        srv6.encapsulation_source_address,
+        Some("2001:db8:1::1".parse().unwrap())
+    );
+    assert_eq!(srv6.locators.len(), 1);
+    assert_eq!(srv6.locators[0].name, "LOC1");
+    assert_eq!(srv6.locators[0].prefix, "fc00:0:1::/48".parse().unwrap());
+    let usid = srv6.locators[0]
+        .micro_segment
+        .as_ref()
+        .expect("micro-segment");
+    assert!(usid.enabled);
+}

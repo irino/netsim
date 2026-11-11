@@ -7,8 +7,9 @@ use crate::validator::{validate_device_config, validate_yang_json, ValidationErr
 
 #[test]
 fn test_pinned_modules_metadata_and_revisions() {
-    assert_eq!(PINNED_MODULES.len(), 9);
+    assert_eq!(PINNED_MODULES.len(), 10);
     let module_names: Vec<&str> = PINNED_MODULES.iter().map(|m| m.name).collect();
+    assert!(module_names.contains(&"ietf-segment-routing"));
     assert!(module_names.contains(&"iana-if-type"));
     assert!(module_names.contains(&"iana-routing-types"));
     assert!(module_names.contains(&"ietf-interfaces"));
@@ -88,6 +89,7 @@ fn test_valid_device_with_bgp_and_static_routes() {
                 ospf: None,
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
             Interface {
                 name: "Loopback0".to_string(),
@@ -101,6 +103,7 @@ fn test_valid_device_with_bgp_and_static_routes() {
                 ospf: None,
                 ospfv3: None,
                 isis: None,
+                vxlan: None,
             },
         ],
         ospf: None,
@@ -126,7 +129,9 @@ fn test_valid_device_with_bgp_and_static_routes() {
             )],
             neighbors_v6: Vec::new(),
             networks_v6: Vec::new(),
+            evpn: None,
         }),
+        segment_routing: None,
         static_routes: vec![StaticRoute {
             destination: Ipv4Prefix::new("0.0.0.0".parse().unwrap(), PrefixLength::new(0).unwrap()),
             next_hop: "203.0.113.2".parse().unwrap(),
@@ -384,11 +389,13 @@ fn test_valid_routing_policy_prefix_sets_validation() {
             ospf: None,
             ospfv3: None,
             isis: None,
+            vxlan: None,
         }],
         ospf: None,
         ospfv3: None,
         isis: None,
         bgp: None,
+        segment_routing: None,
         static_routes: vec![],
         static_routes_v6: Vec::new(),
         prefix_lists: vec![
@@ -515,4 +522,77 @@ fn test_invalid_routing_policy_mask_length_upper_fails() {
         res.is_err(),
         "mask-length-upper < mask-length-lower must fail validation"
     );
+}
+
+#[test]
+fn test_evpn_and_srv6_yang_mapping_and_validation() {
+    let dev = DeviceConfig {
+        hostname: "leaf1".to_string(),
+        interfaces: vec![Interface {
+            name: "Loopback0".to_string(),
+            description: None,
+            enabled: true,
+            ipv4: Some("10.0.0.1/32".parse().unwrap()),
+            ipv6: None,
+            ospf: None,
+            ospfv3: None,
+            isis: None,
+            vxlan: None,
+        }],
+        ospf: None,
+        ospfv3: None,
+        isis: None,
+        bgp: Some(ir::BgpProcess {
+            as_number: 65001,
+            router_id: Some("10.0.0.1".parse().unwrap()),
+            cluster_id: None,
+            peer_groups: vec![],
+            neighbors: vec![],
+            networks: vec![],
+            neighbors_v6: vec![],
+            networks_v6: vec![],
+            evpn: Some(ir::BgpEvpnConfig {
+                enabled: true,
+                advertise_all_vni: Some(true),
+                advertise_default_gw: None,
+                neighbors: vec![ir::BgpEvpnNeighbor {
+                    peer: "10.0.0.100".to_string(),
+                    route_reflector_client: None,
+                    send_community: None,
+                }],
+            }),
+        }),
+        segment_routing: Some(ir::SegmentRoutingConfig {
+            srv6: Some(ir::SrV6Config {
+                enabled: true,
+                encapsulation_source_address: Some("2001:db8:1::1".parse().unwrap()),
+                locators: vec![ir::SrV6Locator {
+                    name: "LOC1".to_string(),
+                    prefix: "fc00:0:1::/48".parse().unwrap(),
+                    micro_segment: None,
+                }],
+            }),
+            mpls: None,
+        }),
+        static_routes: vec![],
+        static_routes_v6: vec![],
+        prefix_lists: vec![],
+        prefix_lists_v6: vec![],
+        community_lists: vec![],
+        policies: vec![],
+        unparsed_lines: vec![],
+    };
+
+    let docs = crate::mapper::map_device_config_to_yang_json(&dev);
+    assert!(docs
+        .uncovered_fields
+        .iter()
+        .any(|u: &String| u.contains("BGP EVPN")));
+    assert!(docs
+        .uncovered_fields
+        .iter()
+        .any(|u: &String| u.contains("SRv6 locator")));
+
+    let res = validate_device_config(&dev);
+    assert!(res.is_ok(), "Validation errors: {:?}", res.err());
 }
